@@ -6,6 +6,7 @@ import type { AiChatRequest, AppState, MenuAction, OpenedFile, SlideOutline } fr
 import * as ai from './ai';
 import { recognize, shutdownOcr } from './ocr';
 import { buildDeck } from './slides';
+import { findFont, warmFontIndex } from './fonts';
 import * as spaces from './spaces';
 import { addRecent, loadApiKey, loadState, saveApiKey, updateState } from './store';
 
@@ -25,7 +26,10 @@ protocol.registerSchemesAsPrivileged([
 
 /** Files the user picked via a dialog, drag-and-drop or the OS; only these may be overwritten. */
 const writablePaths = new Set<string>();
-const dirtyWindows = new Set<number>();
+/** Per window: unsaved changes and the open document's name. */
+const docState = new Map<number, { dirty: boolean; name: string | null }>();
+/** Windows allowed to close without asking (after Save or Don't Save). */
+const closing = new Set<number>();
 let pendingOpen: string | null = pdfFromArgv(process.argv);
 
 function pdfFromArgv(argv: string[]): string | null {
@@ -76,18 +80,27 @@ function createWindow(): BrowserWindow {
   });
 
   win.on('close', (e) => {
-    if (!dirtyWindows.has(id)) return;
+    const state = docState.get(id);
+    if (closing.has(id) || !state?.dirty) return;
+    e.preventDefault();
     const choice = dialog.showMessageBoxSync(win, {
       type: 'warning',
-      buttons: ['Discard changes', 'Cancel'],
-      defaultId: 1,
-      cancelId: 1,
-      message: 'You have unsaved changes.',
-      detail: 'Close the window and discard them?',
+      buttons: ['Save', 'Don’t Save', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      message: `Do you want to save the changes you made to “${state.name ?? 'this document'}”?`,
+      detail: 'Your changes will be lost if you don’t save them.',
     });
-    if (choice === 1) e.preventDefault();
+    if (choice === 0) win.webContents.send('app:saveAndClose');
+    else if (choice === 1) {
+      closing.add(id);
+      win.close();
+    }
   });
-  win.on('closed', () => dirtyWindows.delete(id));
+  win.on('closed', () => {
+    docState.delete(id);
+    closing.delete(id);
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadURL('app://bundle/index.html');
@@ -226,10 +239,25 @@ function registerIpc() {
     return r.filePath;
   });
 
-  ipcMain.on('doc:dirty', (e, dirty: unknown) => {
-    if (dirty) dirtyWindows.add(e.sender.id);
-    else dirtyWindows.delete(e.sender.id);
+  ipcMain.on('doc:state', (e, state: { dirty?: unknown; path?: unknown; name?: unknown }) => {
+    const dirty = !!state?.dirty;
+    const name = typeof state?.name === 'string' ? state.name : null;
+    docState.set(e.sender.id, { dirty, name });
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return;
+    win.setDocumentEdited(dirty); // macOS: dot in the close button
+    if (isMac) win.setRepresentedFilename(typeof state?.path === 'string' ? state.path : '');
+    win.setTitle(name ? `${name}${dirty ? ' — Edited' : ''}` : 'PDF Reader');
   });
+  ipcMain.on('app:closeWindow', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return;
+    closing.add(e.sender.id);
+    win.close();
+  });
+  ipcMain.handle('fonts:find', (_e, name: unknown, hint: unknown) =>
+    typeof name === 'string' ? findFont(name, (hint ?? {}) as { bold?: boolean; italic?: boolean }) : null,
+  );
 
   ipcMain.handle('app:takePendingOpen', () => {
     const p = pendingOpen;
@@ -353,6 +381,7 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     buildMenu();
     createWindow();
+    warmFontIndex();
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });

@@ -9,7 +9,12 @@ const api: DesktopApi = {
   saveAs: (name, data) => ipcRenderer.invoke('dialog:saveAs', name, data),
   exportFile: (name, data, ext, label) => ipcRenderer.invoke('dialog:export', name, data, ext, label),
   pickFiles: (filters, multi) => ipcRenderer.invoke('dialog:pick', filters, multi),
-  setDirty: (dirty) => ipcRenderer.send('doc:dirty', dirty),
+  setDocState: (state) => ipcRenderer.send('doc:state', state),
+  onSaveAndClose: (cb) => {
+    ipcRenderer.on('app:saveAndClose', () => cb());
+  },
+  closeWindow: () => ipcRenderer.send('app:closeWindow'),
+  findFont: (name, hint) => ipcRenderer.invoke('fonts:find', name, hint),
   takePendingOpen: () => ipcRenderer.invoke('app:takePendingOpen'),
   pathForFile: (file) => webUtils.getPathForFile(file),
   onMenu: (cb) => {

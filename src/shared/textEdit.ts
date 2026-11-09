@@ -30,6 +30,7 @@ import {
   decodePDFRawStream,
   rgb,
 } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 import { EditError, type Bytes, type Color, type Rect } from './pdfOps';
 
 // ======================================================================= tokenizer
@@ -230,6 +231,46 @@ interface FontInfo {
   baseFont: string;
   serif: boolean;
   mono: boolean;
+  /** Unicode character → character code in this font, when known. */
+  toCode: Map<string, number> | null;
+  /** Where toCode came from: the font's /ToUnicode map (lists the glyphs a subset contains) or its encoding. */
+  toCodeSource: 'cmap' | 'encoding' | null;
+  /** The font is embedded in full (not a subset), so any code its encoding covers will draw. */
+  fullyUsable: boolean;
+}
+
+/** Parse a /ToUnicode CMap into a reverse map: Unicode string → code. */
+export function parseToUnicode(cmap: string): Map<string, number> {
+  const map = new Map<string, number>();
+  const utf16 = (hexStr: string) => {
+    let out = '';
+    for (let i = 0; i + 4 <= hexStr.length; i += 4) out += String.fromCharCode(parseInt(hexStr.slice(i, i + 4), 16));
+    if (hexStr.length === 2) out = String.fromCharCode(parseInt(hexStr, 16));
+    return out;
+  };
+  const set = (uni: string, code: number) => {
+    if (uni && !map.has(uni)) map.set(uni, code);
+  };
+  for (const block of cmap.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
+    for (const m of block[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]*)>/g)) set(utf16(m[2]), parseInt(m[1], 16));
+  }
+  for (const block of cmap.matchAll(/beginbfrange([\s\S]*?)endbfrange/g)) {
+    for (const m of block[1].matchAll(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*(?:<([0-9a-fA-F]+)>|\[([^\]]*)\])/g)) {
+      const lo = parseInt(m[1], 16);
+      const hi = parseInt(m[2], 16);
+      if (hi - lo > 65535) continue;
+      if (m[3] !== undefined) {
+        const base = utf16(m[3]);
+        for (let c = lo; c <= hi; c++) {
+          const last = base.charCodeAt(base.length - 1) + (c - lo);
+          set(base.slice(0, -1) + String.fromCharCode(last), c);
+        }
+      } else {
+        [...m[4].matchAll(/<([0-9a-fA-F]+)>/g)].forEach((d, k) => set(utf16(d[1]), lo + k));
+      }
+    }
+  }
+  return map;
 }
 
 function num(doc: PDFDocument, o: unknown, fallback = 0): number {
@@ -248,7 +289,7 @@ function lookupArray(doc: PDFDocument, o: unknown): PDFArray | undefined {
 }
 
 function fontInfo(doc: PDFDocument, dict: PDFDict | undefined): FontInfo {
-  const fallback: FontInfo = { codeLength: 1, width: () => 500, baseFont: '', serif: false, mono: false };
+  const fallback: FontInfo = { codeLength: 1, width: () => 500, baseFont: '', serif: false, mono: false, toCode: null, toCodeSource: null, fullyUsable: false };
   if (!dict) return fallback;
   const base = (dict.get(PDFName.of('BaseFont')) as PDFName | undefined)?.decodeText?.() ?? '';
   const subtype = (dict.get(PDFName.of('Subtype')) as PDFName | undefined)?.decodeText?.() ?? '';
@@ -288,10 +329,37 @@ function fontInfo(doc: PDFDocument, dict: PDFDict | undefined): FontInfo {
   }
   const flags = num(doc, descriptor?.get(PDFName.of('Flags')), 0);
   const name = base.replace(/^[A-Z]{6}\+/, '');
+  let toCode: Map<string, number> | null = null;
+  let toCodeSource: FontInfo['toCodeSource'] = null;
+  const tu = dict.lookup(PDFName.of('ToUnicode'));
+  if (tu instanceof PDFStream) {
+    try {
+      const raw = tu instanceof PDFRawStream ? decodePDFRawStream(tu).decode() : tu.getContents();
+      toCode = parseToUnicode(new TextDecoder('latin1').decode(raw));
+      toCodeSource = 'cmap';
+    } catch {
+      toCode = null;
+    }
+  }
+  const embedded = !!descriptor && ['FontFile', 'FontFile2', 'FontFile3'].some((k) => descriptor!.has(PDFName.of(k)));
+  const encodingName = (dict.lookup(PDFName.of('Encoding')) as PDFName | undefined)?.decodeText?.();
+  if (!toCode && subtype !== 'Type0' && encodingName === 'WinAnsiEncoding') {
+    // Simple font with the standard Windows encoding and no ToUnicode map.
+    toCode = new Map();
+    toCodeSource = 'encoding';
+    for (let c = 32; c < 256; c++) {
+      const ch = new TextDecoder('windows-1252').decode(Uint8Array.of(c));
+      if (ch && ch !== '\ufffd') toCode.set(ch, c);
+    }
+  }
   return {
     codeLength,
     width: widthFn,
     baseFont: name,
+    toCode,
+    toCodeSource,
+    // A subset (ABCDEF+Name) only contains the glyphs it originally used.
+    fullyUsable: subtype !== 'Type0' && (!embedded || !/^[A-Z]{6}\+/.test(base)),
     serif: /times|serif|georgia|garamond|cambria|book|palatino|minion|baskerville|caslon/i.test(name) && !/sans/i.test(name) ? true : !!(flags & 2) && !/sans|arial|helvet/i.test(name),
     mono: /courier|mono|consol|menlo/i.test(name) || !!(flags & 1),
   };
@@ -312,6 +380,8 @@ export interface TextShow {
   fontSize: number;
   color: Color;
   font: FontInfo;
+  /** Name of the font in the page's /Font resources (e.g. "F1"). */
+  fontRes: string;
   renderMode: number;
   text: string;
 }
@@ -324,6 +394,7 @@ interface GState {
   th: number;
   tl: number;
   font: FontInfo;
+  fontRes: string;
   fontSize: number;
   tr: number;
   rise: number;
@@ -345,7 +416,7 @@ export function simulateText(doc: PDFDocument, ops: Op[], fonts: PDFDict | undef
     if (!fontCache.has(name)) fontCache.set(name, fontInfo(doc, lookupDict(doc, fonts?.get(PDFName.of(name)))));
     return fontCache.get(name)!;
   };
-  let gs: GState = { ctm: I, fill: { r: 0, g: 0, b: 0 }, tc: 0, tw: 0, th: 1, tl: 0, font: fontInfo(doc, undefined), fontSize: 0, tr: 0, rise: 0 };
+  let gs: GState = { ctm: I, fill: { r: 0, g: 0, b: 0 }, tc: 0, tw: 0, th: 1, tl: 0, font: fontInfo(doc, undefined), fontRes: '', fontSize: 0, tr: 0, rise: 0 };
   const stack: GState[] = [];
   let tm: Matrix = I;
   let tlm: Matrix = I;
@@ -383,6 +454,7 @@ export function simulateText(doc: PDFDocument, ops: Op[], fonts: PDFDict | undef
       fontSize: gs.fontSize,
       color: gs.fill,
       font: gs.font,
+      fontRes: gs.fontRes,
       renderMode: gs.tr,
       text,
     });
@@ -433,7 +505,10 @@ export function simulateText(doc: PDFDocument, ops: Op[], fonts: PDFDict | undef
         break;
       case 'Tf': {
         const name = o.args.find((a) => a.t === 'name');
-        if (name && name.t === 'name') gs.font = getFont(name.v);
+        if (name && name.t === 'name') {
+          gs.font = getFont(name.v);
+          gs.fontRes = name.v;
+        }
         gs.fontSize = n[0] ?? gs.fontSize;
         break;
       }
@@ -511,6 +586,8 @@ export interface TextStyle {
   family: 'sans' | 'serif' | 'mono';
   bold: boolean;
   italic: boolean;
+  /** The PDF's font name without the subset prefix, e.g. "Georgia-Bold". */
+  fontName?: string;
 }
 
 export interface TextRegion {
@@ -532,6 +609,7 @@ function styleOf(s: TextShow): TextStyle {
     family: s.font.mono ? 'mono' : s.font.serif ? 'serif' : 'sans',
     bold: /bold|black|heavy|semibold|demi/i.test(name),
     italic: /italic|oblique/i.test(name),
+    fontName: name || undefined,
   };
 }
 
@@ -564,6 +642,11 @@ export interface ReplaceOptions extends TextRegion {
   text: string;
   /** Override the detected style (e.g. when nothing is detected). */
   style?: Partial<TextStyle>;
+  /**
+   * The same typeface from the user's computer (TrueType/OpenType bytes), used
+   * when the PDF's own embedded copy lacks some of the characters typed.
+   */
+  fontData?: Uint8Array | null;
 }
 
 export interface ReplaceResult {
@@ -571,6 +654,8 @@ export interface ReplaceResult {
   /** 'edited': original text operators were removed; 'covered': it was covered with white. */
   method: 'edited' | 'covered';
   removed: number;
+  /** Which font the new text was written in. */
+  font: { kind: 'original' | 'system' | 'standard'; name: string };
 }
 
 const FONTS: Record<TextStyle['family'], [StandardFonts, StandardFonts, StandardFonts, StandardFonts]> = {
@@ -578,6 +663,51 @@ const FONTS: Record<TextStyle['family'], [StandardFonts, StandardFonts, Standard
   serif: [StandardFonts.TimesRoman, StandardFonts.TimesRomanBold, StandardFonts.TimesRomanItalic, StandardFonts.TimesRomanBoldItalic],
   mono: [StandardFonts.Courier, StandardFonts.CourierBold, StandardFonts.CourierOblique, StandardFonts.CourierBoldOblique],
 };
+
+/** A way to measure and draw text in one font. */
+interface Writer {
+  kind: ReplaceResult['font']['kind'];
+  name: string;
+  width(text: string): number;
+  draw(line: string, x: number, y: number): void;
+}
+
+/**
+ * Write with the PDF's own font resource, if every character typed exists in
+ * it. Spaces missing from a subset are drawn as positioning gaps.
+ */
+function originalWriter(first: TextShow, text: string, size: number, color: Color, sink: string[]): Writer | null {
+  const f = first.font;
+  if (!first.fontRes || !f.toCode) return null;
+  const chars = [...text.replace(/\n/g, '')];
+  const spaceCode = f.toCode.get(' ');
+  for (const ch of chars) {
+    if (ch === ' ' && spaceCode === undefined) continue;
+    if (!f.toCode.has(ch)) return null;
+  }
+  // A subset only contains the glyphs it used. /ToUnicode lists exactly those;
+  // a map derived from the encoding doesn't, so then the font must be complete.
+  if (f.toCodeSource === 'encoding' && !f.fullyUsable) return null;
+  const spaceWidth = spaceCode !== undefined ? f.width(spaceCode) : 250;
+  const hex = (s: string) =>
+    [...s].map((ch) => f.toCode!.get(ch)!.toString(16).padStart(f.codeLength * 2, '0')).join('');
+  const width = (s: string) =>
+    ([...s].reduce((n, ch) => n + (ch === ' ' ? spaceWidth : f.width(f.toCode!.get(ch)!)), 0) / 1000) * size;
+  return {
+    kind: 'original',
+    name: f.baseFont || first.fontRes,
+    width,
+    draw(line, x, y) {
+      // Words joined by the font's own space, or by a positioning gap if it has none.
+      const parts = spaceCode !== undefined ? [line] : line.split(' ');
+      const tj = parts.map((w) => `<${hex(w)}>`).join(` ${fmt(-spaceWidth)} `);
+      sink.push(
+        `BT /${first.fontRes} ${fmt(size)} Tf 0 Tc 0 Tw 100 Tz 0 Ts 0 Tr ${fmt(color.r)} ${fmt(color.g)} ${fmt(color.b)} rg ` +
+          `1 0 0 1 ${fmt(x)} ${fmt(y)} Tm [${tj}] TJ ET`,
+      );
+    },
+  };
+}
 
 /** Replace (or, with empty text, remove) the text inside a region of a page. */
 export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<ReplaceResult> {
@@ -589,6 +719,7 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
   }
 
   // 1. Remove the matched operators, keeping their advance so the rest of each line stays put.
+  let newContent = content;
   if (hits.length) {
     const replace = new Map<number, string>();
     for (const s of hits) {
@@ -611,30 +742,18 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
       at = o.e;
     });
     chunks.push(content.subarray(at));
-    const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+    newContent = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
     let p = 0;
     for (const c of chunks) {
-      out.set(c, p);
+      newContent.set(c, p);
       p += c.length;
     }
-    setPageContent(doc, page, out);
   }
 
   // Nothing visible was removed (text in a form XObject, a scan with an OCR
   // layer, or an image): cover the area instead.
   const method: ReplaceResult['method'] = visible.length ? 'edited' : 'covered';
-  if (method === 'covered') {
-    const pad = 1.5;
-    page.drawRectangle({
-      x: opts.box.x - pad,
-      y: opts.box.y - pad,
-      width: opts.box.width + 2 * pad,
-      height: opts.box.height + 2 * pad,
-      color: rgb(1, 1, 1),
-    });
-  }
 
-  // 2. Draw the new text in the closest standard font.
   const first = [...visible].sort((a, b) => b.y - a.y || a.x - b.x)[0];
   const detected = first ? styleOf(first) : null;
   const style: TextStyle = {
@@ -647,9 +766,55 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
     ...opts.style,
   };
   const text = opts.text.replace(/\r\n?/g, '\n');
-  if (text.trim()) {
+  const size = style.fontSize;
+  const color = style.color;
+
+  // 2. Choose the font: the PDF's own, the same typeface from this computer, or a standard one.
+  const extra: string[] = [];
+  let writer: Writer | null = text.trim() && first && method === 'edited' ? originalWriter(first, text, size, color, extra) : null;
+  if (!writer && text.trim() && opts.fontData) {
+    try {
+      const fk = fontkit.create(opts.fontData as never) as unknown as { hasGlyphForCodePoint(cp: number): boolean };
+      const covered = [...text.replace(/\s/g, '')].every((ch) => fk.hasGlyphForCodePoint(ch.codePointAt(0)!));
+      if (covered) {
+        doc.registerFontkit(fontkit);
+        const font = await doc.embedFont(opts.fontData, { subset: true });
+        writer = {
+          kind: 'system',
+          name: font.name,
+          width: (t) => font.widthOfTextAtSize(t, size),
+          draw: (line, x, y) => page.drawText(line, { x, y, size, font, color: rgb(color.r, color.g, color.b) }),
+        };
+      }
+    } catch {
+      writer = null; // unusable font file: fall back to a standard font
+    }
+  }
+  if (!writer && text.trim()) {
     const font = await doc.embedFont(FONTS[style.family][(style.bold ? 1 : 0) + (style.italic ? 2 : 0)]);
-    const size = style.fontSize;
+    writer = {
+      kind: 'standard',
+      name: font.name,
+      width: (t) => font.widthOfTextAtSize(t, size),
+      draw: (line, x, y) => page.drawText(line, { x, y, size, font, color: rgb(color.r, color.g, color.b) }),
+    };
+  }
+
+  // Wrap the original content so our additions start from a clean graphics state.
+  if (hits.length || writer?.kind === 'original') {
+    const enc = new TextEncoder();
+    const wrapped = new Uint8Array(newContent.length + 4);
+    wrapped.set(enc.encode('q\n'), 0);
+    wrapped.set(newContent, 2);
+    wrapped.set(enc.encode('\nQ'), newContent.length + 2);
+    setPageContent(doc, page, wrapped);
+  }
+  if (method === 'covered') {
+    const pad = 1.5;
+    page.drawRectangle({ x: opts.box.x - pad, y: opts.box.y - pad, width: opts.box.width + 2 * pad, height: opts.box.height + 2 * pad, color: rgb(1, 1, 1) });
+  }
+
+  if (writer) {
     const baselines = [...new Set(visible.map((s) => Math.round(s.y * 10) / 10))].sort((a, b) => b - a);
     const gaps = baselines.slice(1).map((y, i) => baselines[i] - y).filter((g) => g > size * 0.8 && g < size * 3);
     const lineHeight = gaps.length ? gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : size * 1.2;
@@ -657,20 +822,20 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
     let y = first ? first.y : opts.box.y + opts.box.height - size * 0.85;
     const maxWidth = Math.max(opts.box.width + size * 0.5, size * 4);
     const lines: string[] = [];
-    for (const para of text.split('\n')) {
-      let line = '';
-      for (const word of para.split(/ +/)) {
-        const next = line ? `${line} ${word}` : word;
-        if (line && font.widthOfTextAtSize(next, size) > maxWidth) {
-          lines.push(line);
-          line = word;
-        } else line = next;
-      }
-      lines.push(line);
-    }
     try {
+      for (const para of text.split('\n')) {
+        let line = '';
+        for (const word of para.split(/ +/)) {
+          const next = line ? `${line} ${word}` : word;
+          if (line && writer.width(next) > maxWidth) {
+            lines.push(line);
+            line = word;
+          } else line = next;
+        }
+        lines.push(line);
+      }
       for (const line of lines) {
-        if (line) page.drawText(line, { x, y, size, font, color: rgb(style.color.r, style.color.g, style.color.b) });
+        if (line) writer.draw(line, x, y);
         y -= lineHeight;
       }
     } catch (err) {
@@ -679,6 +844,18 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
       }
       throw err;
     }
+    if (extra.length) {
+      // Text in the original font is appended to the page content directly.
+      const contents = page.node.get(PDFName.of('Contents'));
+      const add = doc.context.register(doc.context.flateStream(`q\n${extra.join('\n')}\nQ\n`));
+      if (contents instanceof PDFArray) contents.push(add);
+      else page.node.set(PDFName.of('Contents'), doc.context.obj(contents ? [contents, add] : [add]));
+    }
   }
-  return { bytes: await doc.save(), method, removed: hits.length };
+  return {
+    bytes: await doc.save(),
+    method,
+    removed: hits.length,
+    font: { kind: writer?.kind ?? 'original', name: writer?.name ?? '' },
+  };
 }

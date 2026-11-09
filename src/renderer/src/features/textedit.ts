@@ -5,7 +5,7 @@
  */
 import { blockAt, buildBlocks, type Block } from '../../../shared/textBlocks';
 import { inspectTextStyle, replaceText, type TextStyle } from '../../../shared/textEdit';
-import { applyEdit, doc, on, pageText } from '../core/doc';
+import { api, applyEdit, doc, on, pageText } from '../core/doc';
 import { toPdf, toViewport, view, type Interaction, type PageView } from '../core/viewer';
 import { button, h } from '../ui/dom';
 import { toast } from '../ui/overlays';
@@ -110,7 +110,8 @@ async function openEditor(pv: PageView, block: Block) {
       width: `${Math.max(r.width + fontPx, fontPx * 6)}px`,
       fontSize: `${fontPx}px`,
       lineHeight: `${linePx}px`,
-      fontFamily: CSS_FAMILY[style.family],
+      // The document's own font (already loaded by pdf.js), then a close fallback.
+      fontFamily: `${block.fontName ? `"${block.fontName}", ` : ''}${CSS_FAMILY[style.family]}`,
       fontWeight: style.bold ? '700' : '400',
       fontStyle: style.italic ? 'italic' : 'normal',
       color: toHex(style.color),
@@ -122,7 +123,11 @@ async function openEditor(pv: PageView, block: Block) {
   const bar = h(
     'div',
     { class: 'edit-bar', style: { left: `${r.left - 1}px`, top: `${Math.max(4, top - 46)}px` } },
-    h('span', { class: 'edit-bar-label' }, `${style.family === 'serif' ? 'Serif' : style.family === 'mono' ? 'Mono' : 'Sans'} · ${Math.round(style.fontSize * 10) / 10} pt`),
+    h(
+      'span',
+      { class: 'edit-bar-label', title: 'The font used in the document' },
+      `${prettyFont(style)} · ${Math.round(style.fontSize * 10) / 10} pt`,
+    ),
     del,
     cancel,
     done,
@@ -148,10 +153,14 @@ async function openEditor(pv: PageView, block: Block) {
     // Keep the editor visible until the new page version is drawn, so nothing flickers.
     ta.readOnly = true;
     let method: 'edited' | 'covered' = 'edited';
+    let usedFont: { kind: string; name: string } = { kind: 'original', name: '' };
     void applyEdit(
       async (bytes) => {
-        const res = await replaceText(bytes, { ...region, text, style });
+        // The same typeface from this computer, for characters the PDF's copy lacks.
+        const fontData = text.trim() && style.fontName ? await api.findFont(style.fontName, { bold: style.bold, italic: style.italic }).catch(() => null) : null;
+        const res = await replaceText(bytes, { ...region, text, style, fontData });
         method = res.method;
+        usedFont = res.font;
         return res.bytes;
       },
       { pages: [pv.index], label: text.trim() ? 'Text updated' : 'Text deleted' },
@@ -160,6 +169,8 @@ async function openEditor(pv: PageView, block: Block) {
       requestAnimationFrame(() => requestAnimationFrame(remove));
       if (ok && method === 'covered') {
         toast('That text is part of an image or graphic, so it was covered and replaced rather than edited.', 'info', 6000);
+      } else if (ok && usedFont.kind === 'standard' && style.fontName) {
+        toast(`“${prettyFont(style)}” isn’t installed on this computer, so ${usedFont.name.replace(/-/g, ' ')} was used for this edit.`, 'info', 7000);
       }
     });
   }
@@ -185,6 +196,29 @@ async function openEditor(pv: PageView, block: Block) {
   autosize();
   ta.focus();
   ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+/** "ABCDEF+TimesNewRomanPS-BoldMT" → "Times New Roman Bold". */
+function prettyFont(style: TextStyle): string {
+  const raw = style.fontName;
+  if (!raw) return style.family === 'serif' ? 'Serif' : style.family === 'mono' ? 'Monospace' : 'Sans-serif';
+  return raw
+    .replace(/(PS)?MT$/, '')
+    .replace(/PS-/, '-')
+    .replace(/[-,_]/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Open the editor for the paragraph at a point, if there is one (used by double-click). */
+export async function editTextAt(pv: PageView, x: number, y: number): Promise<boolean> {
+  if (!doc.editable || doc.busy) return false;
+  const p = toPdf(pv, x, y);
+  const block = blockAt(await blocksFor(pv.index), p.x, p.y);
+  if (!block) return false;
+  await openEditor(pv, block);
+  return true;
 }
 
 // ---------------------------------------------------------------- tool

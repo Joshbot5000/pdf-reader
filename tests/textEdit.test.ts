@@ -101,3 +101,54 @@ describe('replaceText', () => {
     await expect(replaceText(await doc.save(), { page: 0, box: { x: 45, y: 695, width: 40, height: 20 }, text: '你好' })).rejects.toThrow(/standard fonts/);
   });
 });
+
+describe('matching the original font', () => {
+  const fontPath = 'node_modules/pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf';
+
+  /** A PDF using an embedded *subset* font, like most PDFs from Word or a browser. */
+  async function subsetPdf(text: string) {
+    const fontkit = (await import('@pdf-lib/fontkit')).default;
+    const { readFileSync } = await import('node:fs');
+    const doc = await PDFDocument.create();
+    doc.registerFontkit(fontkit);
+    const font = await doc.embedFont(readFileSync(fontPath), { subset: true });
+    doc.addPage([600, 800]).drawText(text, { x: 50, y: 700, size: 14, font });
+    return doc.save();
+  }
+  const fontsOf = async (b: Uint8Array) => {
+    const doc = await PDFDocument.load(b);
+    const res = doc.getPage(0).node.Resources()!.lookup(PDFName.of('Font')) as any;
+    return res.keys().map((k: any) => (doc.context.lookup(res.get(k)) as any).get(PDFName.of('BaseFont')).decodeText());
+  };
+  const box = { page: 0, box: { x: 45, y: 695, width: 300, height: 20 } };
+
+  it('reuses the embedded subset font when it has every character', async () => {
+    const before = await subsetPdf('Payment is due within thirty days');
+    const r = await replaceText(before, { ...box, text: 'Payment is due within ten days' });
+    expect(r.font.kind).toBe('original');
+    expect(await text(r.bytes)).toBe('Payment is due within ten days');
+    expect(await fontsOf(r.bytes)).toHaveLength(1); // no second font added
+  });
+
+  it('uses the same typeface from the computer when the subset lacks a character', async () => {
+    const { readFileSync } = await import('node:fs');
+    const before = await subsetPdf('Payment is due');
+    const r = await replaceText(before, { ...box, text: 'Payment is quick', fontData: readFileSync(fontPath) });
+    expect(r.font.kind).toBe('system');
+    expect(r.font.name).toMatch(/LiberationSans/);
+    expect(await text(r.bytes)).toBe('Payment is quick');
+  });
+
+  it('falls back to a standard font when no matching font is available', async () => {
+    const before = await subsetPdf('Payment is due');
+    const r = await replaceText(before, { ...box, text: 'Payment is quick' });
+    expect(r.font.kind).toBe('standard');
+    expect(await text(r.bytes)).toBe('Payment is quick');
+  });
+
+  it('parses ToUnicode bfchar and bfrange entries', async () => {
+    const { parseToUnicode } = await import('../src/shared/textEdit');
+    const map = parseToUnicode('beginbfchar\n<0003> <0020>\nendbfchar\nbeginbfrange\n<0010> <0012> <0041>\n<0020> <0021> [<0061> <0062>]\nendbfrange');
+    expect([...map]).toEqual([[' ', 3], ['A', 16], ['B', 17], ['C', 18], ['a', 32], ['b', 33]]);
+  });
+});

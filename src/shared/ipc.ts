@@ -146,7 +146,12 @@ export interface DesktopApi {
   saveAs(suggestedName: string, data: Uint8Array): Promise<OpenedFile | null>;
   exportFile(suggestedName: string, data: Uint8Array, ext: string, label: string): Promise<string | null>;
   pickFiles(filters: { name: string; extensions: string[] }[], multi: boolean): Promise<{ path: string; name: string; data: Uint8Array }[]>;
-  setDirty(dirty: boolean): void;
+  /** Tell the window which document is open and whether it has unsaved changes. */
+  setDocState(state: { dirty: boolean; path: string | null; name: string | null }): void;
+  /** Main process asks the page to save, then close the window (from the close prompt). */
+  onSaveAndClose(cb: () => void): void;
+  closeWindow(): void;
+  findFont(pdfFontName: string, hint: { bold?: boolean; italic?: boolean }): Promise<Uint8Array | null>;
   takePendingOpen(): Promise<string | null>;
   pathForFile(file: File): string;
   onMenu(cb: (action: MenuAction) => void): void;

@@ -1,11 +1,20 @@
-/** Edit mode: add text, highlight, white-out and freehand drawing. */
-import { addInk, addRect, addText, type Color } from '../../../shared/pdfOps';
+/**
+ * Edit mode: edit and add text, highlight, draw, erase and white-out.
+ *
+ * Pen strokes and highlights are saved as PDF annotations on top of the page
+ * (see shared/annotations.ts), so the Eraser can remove them without ever
+ * touching the document's own content.
+ */
+import { addRect, addText, type Color, type Point } from '../../../shared/pdfOps';
+import { addHighlightAnnotation, addInkAnnotation, distanceTo, listOwnAnnotations, removeOwnAnnotations, type OwnAnnotation } from '../../../shared/annotations';
 import { applyEdit, doc } from '../core/doc';
-import { drag, setInteraction, toPdf, view, type Interaction, type PageView } from '../core/viewer';
+import { drag, setInteraction, toPdf, toViewport, view, type Interaction, type PageView } from '../core/viewer';
+import { cursors } from '../ui/cursors';
 import { button, h } from '../ui/dom';
+import { toast } from '../ui/overlays';
 import { closeTextEditor, createEditTextTool } from './textedit';
 
-export type Tool = 'select' | 'edittext' | 'text' | 'highlight' | 'whiteout' | 'ink';
+export type Tool = 'select' | 'edittext' | 'text' | 'highlight' | 'ink' | 'eraser' | 'whiteout';
 
 const SWATCHES = ['#d0021b', '#1f6feb', '#111111', '#2e7d32', '#7c5cff', '#ff7a00'];
 const HIGHLIGHTS: Record<string, Color> = {
@@ -28,21 +37,29 @@ export function hexToColor(hex: string): Color {
 }
 
 const listeners = new Set<() => void>();
-const changed = () => listeners.forEach((f) => f());
+const changed = () => {
+  // Colour changes update the pen/highlighter cursor too.
+  if (pen.tool !== 'select') setInteraction(interactions[pen.tool]);
+  listeners.forEach((f) => f());
+};
+
+const rgbHex = (c: Color) => `#${[c.r, c.g, c.b].map((v) => Math.round(v * 255).toString(16).padStart(2, '0')).join('')}`;
 
 export function setTool(tool: Tool) {
   if (tool !== 'select' && !doc.editable) return;
   if (tool !== 'edittext') closeTextEditor(true);
   pen.tool = tool;
   setInteraction(interactions[tool]);
-  changed();
+  listeners.forEach((f) => f());
 }
 
 // ---------------------------------------------------------------- interactions
 
 function rectTool(kind: 'highlight' | 'whiteout'): Interaction {
   return {
-    cursor: 'crosshair',
+    get cursor() {
+      return kind === 'highlight' ? cursors.highlighter(rgbHex(HIGHLIGHTS[pen.highlight])) : cursors.whiteout();
+    },
     async down(pv, e, x0, y0) {
       if (doc.busy) return;
       const box = h('div', { class: `draft-rect ${kind}` });
@@ -60,14 +77,19 @@ function rectTool(kind: 'highlight' | 'whiteout'): Interaction {
       const a = toPdf(pv, x0, y0);
       const b = toPdf(pv, x1, y1);
       const color = HIGHLIGHTS[pen.highlight];
-      await applyEdit((bytes) => addRect(bytes, { page: pv.index, a, b, kind, color }), { pages: [pv.index] });
+      await applyEdit(
+        (bytes) => (kind === 'highlight' ? addHighlightAnnotation(bytes, { page: pv.index, a, b, color }) : addRect(bytes, { page: pv.index, a, b, kind })),
+        { pages: [pv.index] },
+      );
       box.remove();
     },
   };
 }
 
 const inkTool: Interaction = {
-  cursor: 'crosshair',
+  get cursor() {
+    return cursors.pen(pen.color);
+  },
   async down(pv, e, x0, y0) {
     if (doc.busy) return;
     const svgNS = 'http://www.w3.org/2000/svg';
@@ -95,8 +117,79 @@ const inkTool: Interaction = {
     });
     if (pts.length < 2) pts.push([x0 + 0.5, y0 + 0.5]); // a click makes a dot
     const points = pts.map(([x, y]) => toPdf(pv, x, y));
-    await applyEdit((b) => addInk(b, { page: pv.index, points, width, color: hexToColor(pen.color) }), { pages: [pv.index] });
+    await applyEdit((b) => addInkAnnotation(b, { page: pv.index, strokes: [points], width, color: hexToColor(pen.color) }), { pages: [pv.index] });
     svg.remove();
+  },
+};
+
+// ---------------------------------------------------------------- eraser
+
+let ownCache: { gen: number; list: Promise<OwnAnnotation[]> } | null = null;
+const ownMarks = () => {
+  if (!ownCache || ownCache.gen !== doc.generation) ownCache = { gen: doc.generation, list: doc.bytes ? listOwnAnnotations(doc.bytes) : Promise.resolve([]) };
+  return ownCache.list;
+};
+
+/** Marks under a point on a page, within the eraser's radius. */
+async function marksAt(pv: PageView, x: number, y: number): Promise<OwnAnnotation[]> {
+  const p: Point = toPdf(pv, x, y);
+  const radius = 7 / view.scale;
+  return (await ownMarks()).filter((a) => a.page === pv.index && distanceTo(a, p) <= radius);
+}
+
+function markBox(pv: PageView, a: OwnAnnotation, cls: string) {
+  const [x0, y0] = toViewport(pv, { x: a.rect[0], y: a.rect[1] });
+  const [x1, y1] = toViewport(pv, { x: a.rect[2], y: a.rect[3] });
+  return h('div', {
+    class: cls,
+    style: { left: `${Math.min(x0, x1)}px`, top: `${Math.min(y0, y1)}px`, width: `${Math.abs(x1 - x0)}px`, height: `${Math.abs(y1 - y0)}px` },
+  });
+}
+
+let eraseHover: HTMLElement | null = null;
+let eraserHintShown = false;
+
+const eraserTool: Interaction = {
+  get cursor() {
+    return cursors.eraser();
+  },
+  async move(pv, e, x, y) {
+    if (e.buttons) return;
+    const [hit] = await marksAt(pv, x, y);
+    eraseHover?.remove();
+    eraseHover = hit ? markBox(pv, hit, 'erase-hover') : null;
+    if (eraseHover) pv.overlay.append(eraseHover);
+  },
+  leave() {
+    eraseHover?.remove();
+    eraseHover = null;
+  },
+  async down(pv, e, x0, y0) {
+    if (doc.busy) return;
+    eraseHover?.remove();
+    const hits = new Map<string, OwnAnnotation>();
+    const boxes: HTMLElement[] = [];
+    const collect = async (x: number, y: number) => {
+      for (const a of await marksAt(pv, x, y)) {
+        if (hits.has(a.ref)) continue;
+        hits.set(a.ref, a);
+        const box = markBox(pv, a, 'erase-mark');
+        boxes.push(box);
+        pv.overlay.append(box);
+      }
+    };
+    await collect(x0, y0);
+    await drag(pv, e, (x, y) => void collect(x, y));
+    if (!hits.size) {
+      if (!eraserHintShown) {
+        eraserHintShown = true;
+        toast('The eraser removes pen and highlighter marks you’ve added. To hide part of the document itself, use White-out.', 'info', 6000);
+      }
+      return;
+    }
+    const refs = [...hits.keys()];
+    await applyEdit((b) => removeOwnAnnotations(b, refs), { pages: [pv.index] });
+    requestAnimationFrame(() => boxes.forEach((b) => b.remove()));
   },
 };
 
@@ -113,8 +206,9 @@ const interactions: Record<Tool, Interaction | null> = {
   edittext: createEditTextTool((pv, x, y) => startTextDraft(pv, x, y)),
   text: textTool,
   highlight: rectTool('highlight'),
-  whiteout: rectTool('whiteout'),
   ink: inkTool,
+  eraser: eraserTool,
+  whiteout: rectTool('whiteout'),
 };
 
 /** A floating textarea; Enter places the text, Shift+Enter adds a line, Esc cancels. */
@@ -179,8 +273,9 @@ export function annotateRibbon(): HTMLElement[] {
     { tool: 'edittext', label: 'Edit text', icon: 'edit', key: 'E' },
     { tool: 'text', label: 'Add text', icon: 'text', key: 'T' },
     { tool: 'highlight', label: 'Highlight', icon: 'highlight', key: 'H' },
-    { tool: 'whiteout', label: 'White-out', icon: 'whiteout', key: 'W' },
     { tool: 'ink', label: 'Draw', icon: 'draw', key: 'D' },
+    { tool: 'eraser', label: 'Eraser', icon: 'eraser', key: 'R' },
+    { tool: 'whiteout', label: 'White-out', icon: 'whiteout', key: 'W' },
   ];
   const group = h('div', { class: 'ribbon-group segmented', role: 'radiogroup', attrs: { 'aria-label': 'Tool' } });
   const btns = tools.map((t) => {
@@ -242,11 +337,19 @@ export function annotateRibbon(): HTMLElement[] {
     swatches.querySelectorAll<HTMLElement>('[data-color]').forEach((s) => s.classList.toggle('active', s.dataset.color === pen.color));
     hl.querySelectorAll<HTMLElement>('[data-hl]').forEach((s) => s.classList.toggle('active', s.dataset.hl === pen.highlight));
     hl.hidden = pen.tool !== 'highlight';
-    swatches.hidden = pen.tool === 'highlight' || pen.tool === 'whiteout' || pen.tool === 'edittext';
-    size.hidden = pen.tool === 'edittext' || pen.tool === 'highlight' || pen.tool === 'whiteout';
-    hint.hidden = pen.tool !== 'edittext';
+    swatches.hidden = !['select', 'text', 'ink'].includes(pen.tool);
+    size.hidden = !['select', 'text', 'ink'].includes(pen.tool);
+    const tip = HINTS[pen.tool];
+    hint.textContent = tip ?? '';
+    hint.hidden = !tip;
   };
-  const hint = h('span', { class: 'ribbon-note' }, 'Click any paragraph to change or delete it · click empty space to add text');
+  const HINTS: Partial<Record<Tool, string>> = {
+    select: 'Double-click any text to edit it',
+    edittext: 'Click any paragraph to change or delete it · click empty space to add text',
+    eraser: 'Drag over pen strokes and highlights to remove them · the document itself is never erased',
+    whiteout: 'Covers part of the page with white (to hide content permanently, use Redact)',
+  };
+  const hint = h('span', { class: 'ribbon-note' });
   listeners.clear();
   listeners.add(sync);
   sync();

@@ -13,7 +13,7 @@ Everything except the AI Assistant runs on your computer; nothing is uploaded.
 | Tool | What it does |
 |---|---|
 | **Home** | Open or drop a PDF, recent files, launcher for every tool |
-| **Edit** | **Edit text**: click any paragraph of the PDF's own text to change or delete it (the original is removed from the page, and the new text matches its size, colour and font style). Add new text, highlight (4 colours), white-out, freehand drawing; undo/redo |
+| **Edit** | **Edit text**: double-click (or click with Edit text) any paragraph of the PDF's own text to change or delete it. The original is removed from the page and the new text uses the document's own font, or the same font installed on your computer, at the same size and colour. Add new text, highlight (4 colours), draw, **Eraser** (removes only your pen strokes and highlights, never the document), white-out; tool-shaped cursors; undo/redo |
 | **Search** | Live find with highlighted matches, match case, whole words; phrases match across line breaks |
 | **Organize** | Page grid with multi-select: rotate, delete, reorder by drag, insert blank pages or another PDF, extract pages to a new PDF |
 | **Fill & Sign** | Fill form fields; draw, type (3 script styles) or upload a signature and initials, saved for reuse; stamp the date |
@@ -46,6 +46,16 @@ a local desktop app: sending documents for signature by email, bulk sending and
 tracking, hosted web forms, sharing Spaces with other people, voice prompts on
 mobile, Microsoft 365 connectors, a template marketplace and image generation.
 Signatures here are visual e-signatures, not certificate-based digital signatures.
+
+## Installing on a Mac
+
+1. Install Node.js (LTS) from https://nodejs.org (one-off).
+2. Download this repository (green **Code** button → **Download ZIP**) and unzip it.
+3. Double-click **Install PDF Reader.command** in the unzipped folder. If macOS
+   says it can't be opened, right-click it → **Open** → **Open**.
+
+It builds the app, replaces any older version in Applications and opens it.
+To update later, download a fresh ZIP and double-click the installer again.
 
 ## Development
 
@@ -88,12 +98,14 @@ On Linux without a display, prefix the e2e and screenshot commands with
 ## Limitations
 
 - Added text uses Helvetica, so it supports Western European characters only.
-- Text, highlights, drawings and signatures are written into the page content,
-  so they can be undone in this app but not moved later in other PDF apps.
-- Edited paragraphs are redrawn in the closest standard font (Helvetica, Times or
-  Courier, with bold/italic), at the original size and colour, so a custom
-  typeface becomes its nearest standard equivalent. A paragraph with mixed
-  styles takes the style of its first line.
+- Pen strokes and highlights are saved as standard PDF annotations, so other
+  apps (Acrobat, Preview) can show, move or delete them too. Added text and
+  signatures are written into the page content.
+- Edited paragraphs use the PDF's own embedded font when it contains every
+  character typed (embedded fonts are usually subsets of the characters the
+  document used); otherwise the same font installed on your computer; and only
+  if neither is available the closest standard font (the app says when). A
+  paragraph with mixed styles takes the style of its first line.
 - Rotated text, and text that is part of an image or graphic, can't be edited in
   place; for graphics it is covered and replaced instead.
 - Redacting a page turns it into an image (with an OCR text layer if chosen),

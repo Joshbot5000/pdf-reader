@@ -225,22 +225,26 @@ export async function openPath(path: string): Promise<boolean> {
 let confirmDiscard: () => Promise<boolean> = async () => true;
 export const setDiscardConfirm = (fn: () => Promise<boolean>) => (confirmDiscard = fn);
 
-export async function save(asNew = false) {
-  if (!doc.bytes || !doc.file) return;
+/** Save to the file (or choose a new one). Resolves true once saved. */
+export async function save(asNew = false): Promise<boolean> {
+  if (!doc.bytes || !doc.file) return false;
+  const bytes = doc.bytes;
   try {
     if (!asNew && doc.file.path) {
-      await api.save(doc.file.path, doc.bytes);
-      toast('Saved', 'success', 1800);
+      await api.save(doc.file.path, bytes);
+      toast(`Saved to ${doc.file.name}`, 'success', 2200);
     } else {
-      const r = await api.saveAs(doc.file.name, doc.bytes);
-      if (!r) return;
+      const r = await api.saveAs(doc.file.name.replace(/\.pdf$/i, '') + (asNew ? ' (copy)' : '') + '.pdf', bytes);
+      if (!r) return false;
       doc.file = { path: r.path, name: r.name };
       toast(`Saved as ${r.name}`, 'success');
     }
-    doc.savedBytes = doc.bytes;
+    doc.savedBytes = bytes;
     emit('state');
+    return true;
   } catch (err) {
     toast(`Could not save: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
   }
 }
 

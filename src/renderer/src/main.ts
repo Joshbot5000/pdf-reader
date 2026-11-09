@@ -9,8 +9,9 @@ import { deletePage, rotatePage } from '../../shared/pdfOps';
 import {
   api, applyEdit, closeDocument, doc, isDirty, on, openDialog, openPath, pageCount, redo, save, setCurrent, setDiscardConfirm, undo,
 } from './core/doc';
-import { initViewer, scrollToPage, setInteraction, setZoom, view } from './core/viewer';
-import { annotateRibbon, setTool, type Tool as PenTool } from './features/annotate';
+import { initViewer, scrollToPage, setInteraction, setZoom, view, type PageDblClick } from './core/viewer';
+import { annotateRibbon, pen, setTool, type Tool as PenTool } from './features/annotate';
+import { editTextAt } from './features/textedit';
 import { assistantOpen, initAssistant, refreshAssistant, toggleAssistant } from './features/assistant';
 import { brandPanel, brandRibbon, activateBrand, leaveBrand, loadBrand } from './features/brand';
 import { activateCompare, comparePanel, initCompare } from './features/compare';
@@ -23,7 +24,7 @@ import { buildSearch, focusSearch } from './features/search';
 import { openSettings } from './features/settings';
 import { loadSignatures, signPanel, signRibbon, stopPlacing, placeDate } from './features/sign';
 import { $, button, h, icon, type IconName } from './ui/dom';
-import { confirmModal, toast } from './ui/overlays';
+import { confirmModal, openModal, toast } from './ui/overlays';
 import { openPalette, type Command } from './ui/palette';
 
 // ======================================================================= modes
@@ -178,7 +179,7 @@ function buildRail() {
   );
 }
 
-const saveBtn = button({ icon: 'save', title: 'Save', shortcut: 'Ctrl+S', onClick: () => save() });
+const saveBtn = button({ icon: 'save', label: 'Save', kind: 'soft', title: 'Save changes to this file', shortcut: 'Ctrl+S', class: 'save-btn', onClick: () => save() });
 const undoBtn = button({ icon: 'undo', title: 'Undo', shortcut: 'Ctrl+Z', onClick: () => undo() });
 const redoBtn = button({ icon: 'redo', title: 'Redo', shortcut: 'Ctrl+Shift+Z', onClick: () => redo() });
 saveBtn.id = 'btn-save';
@@ -192,7 +193,7 @@ function buildTitlebar() {
     undoBtn,
     redoBtn,
     saveBtn,
-    button({ icon: 'download', title: 'Save as…', onClick: () => save(true) }),
+    button({ icon: 'download', title: 'Save a copy as… (Ctrl+Shift+S)', onClick: () => save(true) }),
     h('span', { class: 'title-sep' }),
     button({ icon: 'command', title: 'Command palette', shortcut: 'Ctrl+K', onClick: palette }),
     h('button', { class: 'btn ai-cta', type: 'button', title: 'AI Assistant', on: { click: () => toggleAssistant() } }, icon('ai', 16), h('span', {}, 'Ask AI')),
@@ -243,7 +244,10 @@ function refreshChrome() {
   window.__hasDoc = hasDoc;
   const canEdit = hasDoc && doc.editable && !doc.busy;
   document.querySelectorAll<HTMLButtonElement>('[data-needs-edit]').forEach((b) => (b.disabled = !canEdit));
-  saveBtn.disabled = !canEdit || !isDirty();
+  const dirty = isDirty();
+  saveBtn.disabled = !hasDoc || doc.busy || !dirty;
+  saveBtn.classList.toggle('dirty', dirty);
+  saveBtn.replaceChildren(icon(dirty || !hasDoc ? 'save' : 'check', 16), h('span', {}, dirty || !hasDoc ? 'Save' : 'Saved'));
   undoBtn.disabled = !canEdit || !doc.undo.length;
   redoBtn.disabled = !canEdit || !doc.redo.length;
   document.body.classList.toggle('has-doc', hasDoc);
@@ -261,7 +265,7 @@ function refreshChrome() {
   document.title = doc.file ? `${doc.file.name}${isDirty() ? ' •' : ''} — PDF Reader` : 'PDF Reader';
   pagerEl.hidden = !hasDoc || !['edit', 'sign', 'prepare', 'redact', 'ocr', 'brand'].includes(mode.id);
   updatePager();
-  api.setDirty(isDirty());
+  api.setDocState({ dirty: isDirty(), path: doc.file?.path ?? null, name: doc.file?.name ?? null });
 }
 
 // ======================================================================= commands
@@ -289,6 +293,7 @@ function commands(): Command[] {
     toolCmd('highlight', 'Highlight', 'highlight', 'H'),
     toolCmd('whiteout', 'White-out', 'whiteout', 'W'),
     toolCmd('ink', 'Draw', 'draw', 'D'),
+    toolCmd('eraser', 'Eraser (removes your pen and highlights)', 'eraser', 'R'),
     { id: 'undo', label: 'Undo', group: 'Edit', icon: 'undo', shortcut: `${mod}Z`, enabled: () => !!doc.undo.length, run: undo },
     { id: 'redo', label: 'Redo', group: 'Edit', icon: 'redo', shortcut: `${mod}⇧Z`, enabled: () => !!doc.redo.length, run: redo },
     { id: 'find', label: 'Find in document', group: 'Edit', icon: 'search', shortcut: `${mod}F`, enabled: hasDoc, run: focusSearch },
@@ -322,8 +327,26 @@ async function openAndEdit() {
   await openDialog();
 }
 
+/** Adobe-style prompt before leaving a document with unsaved changes. Resolves true to continue. */
+async function askToSave(): Promise<boolean> {
+  if (!isDirty()) return true;
+  let choice = 'cancel' as 'save' | 'discard' | 'cancel';
+  await openModal({
+    title: `Save changes to “${doc.file?.name ?? 'this document'}”?`,
+    icon: 'save',
+    body: h('p', { class: 'modal-text' }, 'Your changes will be lost if you don’t save them.'),
+    actions: [
+      { label: 'Don’t Save', kind: 'ghost', onClick: () => (choice = 'discard') },
+      { label: 'Cancel', onClick: () => (choice = 'cancel') },
+      { label: 'Save', kind: 'primary', onClick: () => (choice = 'save') },
+    ],
+  }).result;
+  if (choice === 'save') return save();
+  return choice === 'discard';
+}
+
 async function closeDoc() {
-  if (isDirty() && !(await confirmModal('Discard unsaved changes?', 'Your edits to this document will be lost.', 'Discard', true))) return;
+  if (!(await askToSave())) return;
   closeDocument();
   await setMode('home');
 }
@@ -335,7 +358,11 @@ initOrganizer($('#organizer'));
 initCompare($('#compare'));
 initOcr($('#ocr-banner'));
 initAssistant($('#assistant'), () => void openSettings());
-setDiscardConfirm(() => confirmModal('Discard unsaved changes?', 'Opening another document will discard your edits to this one.', 'Discard', true));
+setDiscardConfirm(askToSave);
+// "Save" in the close-window prompt: save, then let the window close.
+api.onSaveAndClose(async () => {
+  if (await save()) api.closeWindow();
+});
 buildRail();
 buildTitlebar();
 updatePager = buildPager();
@@ -350,6 +377,15 @@ on('opened', () => {
 
 /** A dialog or the palette is open (ignoring ones that are fading out). */
 const dialogOpen = () => !!document.querySelector('.modal-backdrop:not(.leaving), .palette-backdrop:not(.leaving)');
+
+// Double-click text to type into it (Edit mode, with Select or Edit text).
+document.addEventListener('page:dblclick', (e) => {
+  const { pv, x, y } = (e as CustomEvent<PageDblClick>).detail;
+  if (!doc.editable || mode.id !== 'edit' || !['select', 'edittext'].includes(pen.tool)) return;
+  window.getSelection()?.removeAllRanges(); // drop the word the double-click selected
+  setTool('edittext');
+  void editTextAt(pv, x, y);
+});
 
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -377,7 +413,7 @@ document.addEventListener('keydown', (e) => {
     if (mode.id === 'edit') setTool('select');
     else if (mode.id !== 'redact' && mode.id !== 'prepare') setInteraction(null);
   } else if (!mod && !e.altKey && doc.pdf && mode.id === 'edit') {
-    const tools: Record<string, PenTool> = { v: 'select', e: 'edittext', t: 'text', h: 'highlight', w: 'whiteout', d: 'ink' };
+    const tools: Record<string, PenTool> = { v: 'select', e: 'edittext', t: 'text', h: 'highlight', d: 'ink', r: 'eraser', w: 'whiteout' };
     if (tools[key]) setTool(tools[key]);
   }
 });

@@ -101,7 +101,8 @@ export function initViewer(viewer: HTMLElement, pages: HTMLElement, thumbs: HTML
     if (!view.fitWidth || !doc.pdf) return;
     clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
-      if (doc.busy || Math.abs(fitScale() - view.scale) < 0.01) return;
+      // Re-check: the user may have zoomed manually since the resize.
+      if (!view.fitWidth || doc.busy || Math.abs(fitScale() - view.scale) < 0.01) return;
       void setZoom('fit');
     }, 150);
   }).observe(viewerEl);
@@ -434,7 +435,19 @@ export function setInteraction(next: Interaction | null) {
   document.body.style.setProperty('--tool-cursor', next?.cursor ?? 'default');
 }
 
+export interface PageDblClick {
+  pv: PageView;
+  x: number;
+  y: number;
+}
+
 function attachInteraction(pv: PageView) {
+  // Double-click anywhere on a page (text layer or tool overlay).
+  pv.el.addEventListener('dblclick', (e) => {
+    if ((e.target as HTMLElement).closest('.text-editor, .edit-bar, .text-draft')) return;
+    const [x, y] = localPoint(pv, e);
+    document.dispatchEvent(new CustomEvent<PageDblClick>('page:dblclick', { detail: { pv, x, y } }));
+  });
   pv.overlay.addEventListener('pointerdown', (e) => {
     if (!interaction || e.button !== 0) return;
     const [x, y] = localPoint(pv, e);

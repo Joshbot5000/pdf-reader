@@ -13,6 +13,8 @@ export interface Run {
   /** [a, b, c, d, e, f] text-to-user-space matrix. */
   transform: number[];
   width: number;
+  /** pdf.js font id (the loaded font face), when known. */
+  fontName?: string;
 }
 
 export interface Line {
@@ -30,22 +32,24 @@ export interface Block {
   size: number;
   /** Typical distance between baselines (0 for a single line). */
   lineGap: number;
+  /** pdf.js font id of the first run, for showing the editor in the same font. */
+  fontName?: string;
 }
 
 export function buildBlocks(runs: Run[]): Block[] {
-  type R = { str: string; x0: number; x1: number; y: number; size: number };
+  type R = { str: string; x0: number; x1: number; y: number; size: number; font?: string };
   const rs: R[] = [];
   for (const r of runs) {
     if (!r.str.trim()) continue;
     const [a, b, c, d, e, f] = r.transform;
     // Only horizontal, upright text can be edited.
     if (Math.abs(b) > 1e-3 * Math.abs(a) || Math.abs(c) > 1e-3 * Math.abs(d) || a <= 0 || d <= 0) continue;
-    rs.push({ str: r.str, x0: e, x1: e + r.width, y: f, size: Math.abs(d) });
+    rs.push({ str: r.str, x0: e, x1: e + r.width, y: f, size: Math.abs(d), font: r.fontName });
   }
   rs.sort((p, q) => q.y - p.y || p.x0 - q.x0);
 
   // Lines: same baseline (±35% of the size), similar size, small horizontal gap.
-  const lines: (Line & { runs: R[] })[] = [];
+  const lines: (Line & { runs: R[]; font?: string })[] = [];
   for (const r of rs) {
     const line = lines.find(
       (l) =>
@@ -59,7 +63,7 @@ export function buildBlocks(runs: Run[]): Block[] {
       line.x1 = Math.max(line.x1, r.x1);
       line.x0 = Math.min(line.x0, r.x0);
       line.size = Math.max(line.size, r.size);
-    } else lines.push({ x0: r.x0, x1: r.x1, y: r.y, size: r.size, text: '', runs: [r] });
+    } else lines.push({ x0: r.x0, x1: r.x1, y: r.y, size: r.size, text: '', runs: [r], font: r.font });
   }
   for (const l of lines) {
     l.runs.sort((p, q) => p.x0 - q.x0);
@@ -94,7 +98,7 @@ export function buildBlocks(runs: Run[]): Block[] {
       b.gaps.push(b.lines[b.lines.length - 1].y - l.y);
       b.lines.push(l);
     } else {
-      blocks.push({ box: { x: l.x0, y: l.y, width: l.x1 - l.x0, height: 0 }, lines: [l], text: '', size: l.size, lineGap: 0, gaps: [] });
+      blocks.push({ box: { x: l.x0, y: l.y, width: l.x1 - l.x0, height: 0 }, lines: [l], text: '', size: l.size, lineGap: 0, gaps: [], fontName: l.font });
       continue;
     }
     const x0 = Math.min(b.box.x, l.x0);
@@ -102,7 +106,7 @@ export function buildBlocks(runs: Run[]): Block[] {
     b.box = { ...b.box, x: x0, width: x1 - x0 };
   }
 
-  return blocks.map(({ lines: ls, gaps, size }) => {
+  return blocks.map(({ lines: ls, gaps, size, fontName }) => {
     const x0 = Math.min(...ls.map((l) => l.x0));
     const x1 = Math.max(...ls.map((l) => l.x1));
     const top = ls[0].y + size * 0.9;
@@ -119,6 +123,7 @@ export function buildBlocks(runs: Run[]): Block[] {
       text,
       size,
       lineGap: gaps.length ? gaps[0] : 0,
+      fontName,
     };
   });
 }

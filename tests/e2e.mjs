@@ -102,7 +102,7 @@ await step('edits existing text smoothly', async () => {
     new MutationObserver((ms) => ms.forEach((m) => m.removedNodes.forEach((n) => n.classList?.contains('page') && window.__removed++)))
       .observe(document.querySelector('#pages'), { childList: true });
   });
-  await win.click('[data-tool="edittext"]');
+  await win.click('[data-tool="select"]');
   await pageBox(0);
   const rent = win.locator('.page >> nth=0').locator('.textLayer span', { hasText: '£1,850' }).first();
   // The tool overlay sits above the text layer, so use real mouse positions.
@@ -111,10 +111,10 @@ await step('edits existing text smoothly', async () => {
     return [b.x + Math.min(40, b.width / 2), b.y + b.height / 2];
   };
   const rentAt = await at(rent);
-  await win.mouse.move(...rentAt);
-  await win.waitForSelector('.text-hover');
-  await win.mouse.click(...rentAt);
+  // Double-click the text with the Select tool to start typing into it.
+  await win.mouse.dblclick(...rentAt);
   await win.waitForSelector('.text-editor');
+  assert.equal(await win.getAttribute('[data-tool="edittext"]', 'aria-checked'), 'true');
   assert.match(await win.inputValue('.text-editor'), /^The rent is £1,850 per calendar month/);
   await win.fill('.text-editor', 'The rent is £1,900 per calendar month, payable in advance on the first day of each month.');
   await win.click('.edit-bar button:has-text("Done")');
@@ -151,6 +151,41 @@ await step('highlights an area', async () => {
   await win.mouse.move(b.x + 400, b.y + 230, { steps: 5 });
   await win.mouse.up();
   await idle();
+  await win.click('[data-tool="select"]');
+});
+
+await step('draws, then erases only its own pen marks', async () => {
+  const page1Text = async () => win.evaluate(() => document.querySelectorAll('.page')[1].querySelector('.textLayer')?.textContent ?? '');
+  const textBefore = await page1Text();
+  await win.click('[data-tool="ink"]');
+  assert.match(await win.evaluate(() => getComputedStyle(document.body).getPropertyValue('--tool-cursor')), /^url\("data:image\/svg\+xml/, 'pen cursor');
+  const b = await pageBox(1);
+  for (const y of [420, 480]) {
+    await win.mouse.move(b.x + 120, b.y + y);
+    await win.mouse.down();
+    await win.mouse.move(b.x + 320, b.y + y + 10, { steps: 8 });
+    await win.mouse.up();
+    await idle();
+  }
+  await win.click('[data-tool="eraser"]');
+  const undoBefore = await win.evaluate(() => document.querySelector('#btn-undo').disabled);
+  // Rubbing over the document's own text erases nothing.
+  const b2 = await pageBox(1);
+  await win.mouse.move(b2.x + 60, b2.y + 70);
+  await win.mouse.down();
+  await win.mouse.move(b2.x + 400, b2.y + 140, { steps: 10 });
+  await win.mouse.up();
+  await idle();
+  assert.equal(await page1Text(), textBefore, 'document text untouched by the eraser');
+  // Erase the first stroke only.
+  await win.mouse.move(b2.x + 200, b2.y + 420);
+  await win.mouse.down();
+  await win.waitForSelector('.erase-mark');
+  await win.mouse.move(b2.x + 260, b2.y + 426, { steps: 4 });
+  await win.mouse.up();
+  await idle();
+  await win.waitForSelector('.erase-mark', { state: 'detached' });
+  assert.equal(undoBefore, false);
   await win.click('[data-tool="select"]');
 });
 
@@ -269,6 +304,25 @@ await step('runs a command from the palette', async () => {
   await win.waitForFunction(() => /%$/.test(document.querySelector('.pager-zoom')?.textContent ?? ''));
 });
 
+await step('asks to save when closing a document with changes', async () => {
+  await win.click('[data-tool="ink"]');
+  const b = await pageBox(1);
+  // Page 2 is landscape now (rotated earlier), so draw near its top.
+  await win.mouse.move(b.x + 120, b.y + 120);
+  await win.mouse.down();
+  await win.mouse.move(b.x + 300, b.y + 130, { steps: 6 });
+  await win.mouse.up();
+  await idle();
+  await win.waitForSelector('#btn-save.dirty');
+  assert.equal((await win.locator('#btn-save').innerText()).trim(), 'Save');
+  await win.keyboard.press('Control+k');
+  await win.fill('.palette-input', 'close document');
+  await win.keyboard.press('Enter');
+  await win.waitForSelector('.modal >> text=Save changes to');
+  await win.click('.modal .btn-primary'); // Save
+  await win.waitForSelector('.home-inner');
+});
+
 await app.close();
 
 // ---- verify the saved file independently
@@ -289,6 +343,10 @@ assert.match(text, /Tenancy/i, 'OCR restored searchable text');
 assert.match(text, /Landon & Co\. Solicitors/, 'branding text added');
 const annots = lib.getPage(0).node.Annots()?.asArray() ?? [];
 assert.ok(annots.length >= 1, 'brand link annotation present');
+const inks = (lib.getPage(1).node.Annots()?.asArray() ?? [])
+  .map((r) => lib.context.lookup(r))
+  .filter((a) => a.get(PDFName.of('Subtype'))?.decodeText?.() === 'Ink');
+assert.equal(inks.length, 2, 'two of three pen strokes remain (one erased) as annotations');
 const state = JSON.parse(readFileSync(join(userData, 'state.json'), 'utf8'));
 assert.equal(state.signatures.length, 1, 'signature saved to library');
 assert.equal(state.templates[0]?.name, 'Tenancy sign-off', 'template saved');

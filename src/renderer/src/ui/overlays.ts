@@ -18,8 +18,10 @@ export function toast(message: string, kind: ToastKind = 'error', ms = kind === 
     el.classList.add('leaving');
     setTimeout(() => el.remove(), 200);
   };
-  el.addEventListener('click', close);
   root.append(el);
+  // Keep at most three on screen.
+  const live = [...root.querySelectorAll('.toast:not(.leaving)')];
+  live.slice(0, Math.max(0, live.length - 3)).forEach((old) => old.remove());
   setTimeout(close, ms);
 }
 
