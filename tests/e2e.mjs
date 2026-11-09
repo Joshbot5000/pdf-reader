@@ -71,7 +71,7 @@ const pageBox = async (i) => {
 const rail = (mode) => win.click(`.rail-btn[data-mode="${mode}"]`);
 
 await step('opens the file passed on the command line', async () => {
-  await win.waitForSelector('.page.ready .textLayer span');
+  await win.waitForSelector('.page .textLayer span');
   assert.equal(await win.locator('.page').count(), 3);
   assert.match(await win.locator('#doc-chip').innerText(), /Tenancy agreement\.pdf/);
 });
@@ -91,6 +91,56 @@ await step('adds text with the text tool', async () => {
   await win.keyboard.press('Enter');
   await idle();
   await win.waitForFunction(() => document.querySelector('.page .textLayer')?.textContent?.includes('Reviewed by JL'));
+});
+
+await step('edits existing text smoothly', async () => {
+  // Remember the page elements and the untouched pages' canvases.
+  await win.evaluate(() => {
+    window.__pages = [...document.querySelectorAll('.page')];
+    window.__canvases = window.__pages.map((p) => p.querySelector('canvas.render'));
+    window.__removed = 0;
+    new MutationObserver((ms) => ms.forEach((m) => m.removedNodes.forEach((n) => n.classList?.contains('page') && window.__removed++)))
+      .observe(document.querySelector('#pages'), { childList: true });
+  });
+  await win.click('[data-tool="edittext"]');
+  await pageBox(0);
+  const rent = win.locator('.page >> nth=0').locator('.textLayer span', { hasText: '£1,850' }).first();
+  // The tool overlay sits above the text layer, so use real mouse positions.
+  const at = async (loc) => {
+    const b = await loc.boundingBox();
+    return [b.x + Math.min(40, b.width / 2), b.y + b.height / 2];
+  };
+  const rentAt = await at(rent);
+  await win.mouse.move(...rentAt);
+  await win.waitForSelector('.text-hover');
+  await win.mouse.click(...rentAt);
+  await win.waitForSelector('.text-editor');
+  assert.match(await win.inputValue('.text-editor'), /^The rent is £1,850 per calendar month/);
+  await win.fill('.text-editor', 'The rent is £1,900 per calendar month, payable in advance on the first day of each month.');
+  await win.click('.edit-bar button:has-text("Done")');
+  await idle();
+  await win.waitForFunction(() => {
+    const t = document.querySelector('.page .textLayer')?.textContent ?? '';
+    return t.includes('£1,900') && !t.includes('£1,850');
+  });
+  await win.waitForSelector('.text-editor', { state: 'detached' });
+
+  // Delete a line of the original text.
+  const subtitle = win.locator('.page >> nth=0').locator('.textLayer span', { hasText: 'Housing Act 1988' }).first();
+  await pageBox(0); // scroll back to the top of page 1
+  await win.mouse.click(...(await at(subtitle)));
+  await win.click('.edit-bar button:has-text("Delete text")');
+  await idle();
+  await win.waitForFunction(() => !(document.querySelector('.page .textLayer')?.textContent ?? '').includes('section 19A'));
+
+  const smooth = await win.evaluate(() => ({
+    samePages: [...document.querySelectorAll('.page')].every((p, i) => p === window.__pages[i]),
+    removed: window.__removed,
+    untouched: [1, 2].every((i) => window.__pages[i].querySelector('canvas.render') === window.__canvases[i]),
+    redrawn: window.__pages[0].querySelector('canvas.render') !== window.__canvases[0],
+  }));
+  assert.deepEqual(smooth, { samePages: true, removed: 0, untouched: true, redrawn: true }, 'edits update in place without rebuilding pages');
+  await win.click('[data-tool="select"]');
 });
 
 await step('highlights an area', async () => {

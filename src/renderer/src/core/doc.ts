@@ -129,8 +129,17 @@ export interface EditOptions {
   /** Page to show after the edit. */
   scrollTo?: number;
   label?: string;
+  /** Pages the edit changed (others keep their rendering). Omit if unknown. */
+  pages?: number[];
 }
 let pendingScroll: number | undefined;
+let pendingChanged: Set<number> | null = null;
+/** Pages changed by the last edit, or null when every page may have changed. */
+export const takeChangedPages = () => {
+  const c = pendingChanged;
+  pendingChanged = null;
+  return c;
+};
 export const takeScrollTarget = () => {
   const t = pendingScroll;
   pendingScroll = undefined;
@@ -156,6 +165,7 @@ export async function applyEdit(fn: (bytes: Bytes) => Promise<Bytes>, opts: Edit
       pendingScroll = opts.scrollTo;
       doc.current = opts.scrollTo;
     }
+    pendingChanged = opts.pages ? new Set(opts.pages) : null;
     await setBytes(after);
     if (opts.label) toast(opts.label, 'success', 2200);
     return true;

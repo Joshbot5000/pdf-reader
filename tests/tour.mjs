@@ -37,7 +37,7 @@ const shot = async (name) => {
 await win.waitForSelector('.home-inner');
 await shot('01-home');
 await app.evaluate(({ BrowserWindow }, p) => BrowserWindow.getAllWindows()[0].webContents.send('file:openRequest', p), pdf);
-await win.waitForSelector('.page.ready .textLayer span');
+await win.waitForSelector('.page .textLayer span');
 await shot('02-edit');
 await win.fill('#search', 'tenant');
 await win.waitForSelector('.hit.current');

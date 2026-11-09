@@ -70,7 +70,7 @@ function fieldTool(type: NewFieldType): Interaction {
         options = raw.split(',').map((s) => s.trim()).filter(Boolean);
       }
       const base = FIELD_TYPES.find((f) => f.type === type)!.base;
-      await applyEdit((bytes) => createFields(bytes, [{ type, name: base, page: pv.index, rect, options }]));
+      await applyEdit((bytes) => createFields(bytes, [{ type, name: base, page: pv.index, rect, options }]), { pages: [pv.index] });
     },
   };
 }

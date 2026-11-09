@@ -1,14 +1,20 @@
 /**
- * Renders the open document: lazily rendered pages with a selectable text
- * layer, a decoration layer (search hits, redaction marks…) and an
- * interaction overlay that the active tool plugs into.
+ * Renders the open document: pages with a selectable text layer, a
+ * decoration layer (search hits, redaction marks…) and an interaction overlay
+ * that the active tool plugs into.
+ *
+ * Updates are flicker-free: every page is drawn into a detached canvas and
+ * swapped in only when complete. After an edit that keeps the page layout,
+ * existing page elements are reused and only the pages that changed are
+ * redrawn; zooming stretches the current pixels immediately and sharpens them
+ * when the new rendering is ready.
  */
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
 import { movePage } from '../../../shared/pdfOps';
 import type { Point } from '../../../shared/pdfOps';
 import { h } from '../ui/dom';
-import { applyEdit, doc, emit, on, setCurrent, takeScrollTarget } from './doc';
+import { applyEdit, doc, emit, on, setCurrent, takeChangedPages, takeScrollTarget } from './doc';
 
 export interface PageView {
   index: number;
@@ -17,8 +23,12 @@ export interface PageView {
   textLayer: HTMLDivElement;
   decor: HTMLDivElement;
   overlay: HTMLDivElement;
+  page: PDFPageProxy;
   viewport: PageViewport;
+  /** The content shown is up to date for the current document version and scale. */
   rendered: boolean;
+  /** Incremented per render request so stale renders are dropped. */
+  token: number;
 }
 
 export interface Interaction {
@@ -38,6 +48,8 @@ export const view = {
   baseWidth: 0,
   views: [] as PageView[],
   pages: [] as PDFPageProxy[],
+  /** Unscaled size + rotation of each page, to detect layout changes. */
+  layout: [] as string[],
 };
 
 let viewerEl: HTMLElement;
@@ -46,6 +58,8 @@ let thumbsEl: HTMLElement;
 let interaction: Interaction | null = null;
 const decorators = new Map<string, Decorator>();
 let observer: IntersectionObserver | null = null;
+/** Pages currently within (or near) the viewport. */
+const near = new Set<number>();
 /** While we scroll programmatically, the chosen page stays current. */
 let programmaticScroll = false;
 
@@ -54,11 +68,13 @@ export function initViewer(viewer: HTMLElement, pages: HTMLElement, thumbs: HTML
   pagesEl = pages;
   thumbsEl = thumbs;
 
-  on('loaded', () => void rebuild());
+  on('loaded', () => void refresh());
   on('closed', () => {
     observer?.disconnect();
+    near.clear();
     view.views = [];
     view.pages = [];
+    view.layout = [];
     pagesEl.replaceChildren();
     thumbsEl.replaceChildren();
   });
@@ -87,7 +103,7 @@ export function initViewer(viewer: HTMLElement, pages: HTMLElement, thumbs: HTML
     resizeTimer = window.setTimeout(() => {
       if (doc.busy || Math.abs(fitScale() - view.scale) < 0.01) return;
       void setZoom('fit');
-    }, 200);
+    }, 150);
   }).observe(viewerEl);
 }
 
@@ -96,84 +112,143 @@ function fitScale(): number {
   return Math.max(0.25, Math.min(3, available / Math.max(1, Math.min(view.baseWidth, 1100))));
 }
 
-async function rebuild() {
+const layoutKey = (p: PDFPageProxy) => {
+  const v = p.getViewport({ scale: 1 });
+  return `${v.width.toFixed(2)}x${v.height.toFixed(2)}`;
+};
+
+/** Called whenever a new version of the document has loaded. */
+async function refresh() {
   const pdf = doc.pdf;
   if (!pdf) return;
   const gen = doc.generation;
-  const scrollRatio = viewerEl.scrollTop / Math.max(1, viewerEl.scrollHeight);
+  const changed = takeChangedPages();
+  const target = takeScrollTarget();
   const pages = await Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1)));
   if (gen !== doc.generation) return;
+  const layout = pages.map(layoutKey);
+  const sameLayout = view.views.length > 0 && layout.length === view.layout.length && layout.every((k, i) => k === view.layout[i]);
   view.pages = pages;
+  view.layout = layout;
   view.baseWidth = Math.max(...pages.map((p) => p.getViewport({ scale: 1 }).width));
-  if (view.fitWidth) view.scale = fitScale();
-  buildViews(pages);
-  buildThumbs(pages);
-  const target = takeScrollTarget();
-  if (target !== undefined) scrollToPage(target, 'instant');
-  else viewerEl.scrollTop = scrollRatio * viewerEl.scrollHeight;
+
+  if (sameLayout) {
+    // Same pages, same sizes: keep everything on screen and redraw only what changed.
+    view.views.forEach((pv, i) => {
+      pv.page = pages[i];
+      pv.viewport = pages[i].getViewport({ scale: view.scale });
+      if (changed && !changed.has(i)) return;
+      pv.rendered = false;
+      if (near.has(i)) void renderPage(pv);
+    });
+    refreshThumbs(pages, changed);
+    redecorate();
+    if (target !== undefined) scrollToPage(target, 'instant');
+  } else {
+    if (view.fitWidth) view.scale = fitScale();
+    const anchor = target ?? doc.current;
+    await replaceViews(pages, anchor);
+    if (gen !== doc.generation) return;
+    await buildThumbs(pages);
+  }
   emit('state');
 }
 
-function buildViews(pages: PDFPageProxy[]) {
+function createView(page: PDFPageProxy, index: number): PageView {
+  const viewport = page.getViewport({ scale: view.scale });
+  const canvas = h('canvas', { class: 'render' });
+  const textLayer = h('div', { class: 'textLayer' });
+  const decor = h('div', { class: 'decor' });
+  const overlay = h('div', { class: 'overlay' });
+  const el = h(
+    'div',
+    {
+      class: 'page',
+      dataset: { index: String(index) },
+      style: { width: `${Math.floor(viewport.width)}px`, height: `${Math.floor(viewport.height)}px` },
+      attrs: { 'aria-label': `Page ${index + 1}` },
+    },
+    canvas,
+    textLayer,
+    decor,
+    overlay,
+    h('div', { class: 'page-number' }, String(index + 1)),
+  );
+  el.style.setProperty('--total-scale-factor', String(view.scale));
+  const pv: PageView = { index, el, canvas, textLayer, decor, overlay, page, viewport, rendered: false, token: 0 };
+  attachInteraction(pv);
+  return pv;
+}
+
+function observe() {
   observer?.disconnect();
+  near.clear();
   observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        const v = view.views[Number((entry.target as HTMLElement).dataset.index)];
-        if (v && !v.rendered) void renderPage(v, pages[v.index]);
+        const i = Number((entry.target as HTMLElement).dataset.index);
+        if (entry.isIntersecting) {
+          near.add(i);
+          const pv = view.views[i];
+          if (pv && !pv.rendered) void renderPage(pv);
+        } else near.delete(i);
       }
     },
-    { root: viewerEl, rootMargin: '150% 0px' },
+    { root: viewerEl, rootMargin: '120% 0px' },
   );
-
-  view.views = pages.map((page, index) => {
-    const viewport = page.getViewport({ scale: view.scale });
-    const canvas = h('canvas', { class: 'render' });
-    const textLayer = h('div', { class: 'textLayer' });
-    const decor = h('div', { class: 'decor' });
-    const overlay = h('div', { class: 'overlay' });
-    const el = h(
-      'div',
-      {
-        class: 'page',
-        dataset: { index: String(index) },
-        style: { width: `${Math.floor(viewport.width)}px`, height: `${Math.floor(viewport.height)}px` },
-        attrs: { 'aria-label': `Page ${index + 1}` },
-      },
-      canvas,
-      textLayer,
-      decor,
-      overlay,
-      h('div', { class: 'page-number' }, String(index + 1)),
-    );
-    el.style.setProperty('--total-scale-factor', String(view.scale));
-    const pv: PageView = { index, el, canvas, textLayer, decor, overlay, viewport, rendered: false };
-    attachInteraction(pv);
-    return pv;
-  });
-  pagesEl.replaceChildren(...view.views.map((v) => v.el));
   view.views.forEach((v) => observer!.observe(v.el));
 }
 
-async function renderPage(pv: PageView, page: PDFPageProxy) {
+/**
+ * The page layout changed (pages added, removed, rotated or resized): build
+ * the new pages off-screen, draw the ones that will be visible, then swap.
+ */
+async function replaceViews(pages: PDFPageProxy[], anchor: number) {
+  const gen = doc.generation;
+  const views = pages.map((p, i) => createView(p, i));
+  const visible = [anchor - 1, anchor, anchor + 1, anchor + 2].filter((i) => i >= 0 && i < views.length);
+  // Draw what will be on screen first (bounded, so a slow page can't stall the swap).
+  await Promise.race([Promise.all(visible.map((i) => renderPage(views[i], true))), new Promise((r) => setTimeout(r, 700))]);
+  if (gen !== doc.generation) return;
+  view.views = views;
+  pagesEl.replaceChildren(...views.map((v) => v.el));
+  scrollToPage(Math.min(anchor, views.length - 1), 'instant');
+  observe();
+}
+
+async function renderPage(pv: PageView, detached = false) {
+  const token = ++pv.token;
   pv.rendered = true;
   const gen = doc.generation;
   const dpr = window.devicePixelRatio || 1;
-  const { viewport, canvas } = pv;
+  const { viewport, page } = pv;
+  const scale = view.scale;
+  const canvas = h('canvas', { class: 'render' });
   canvas.width = Math.floor(viewport.width * dpr);
   canvas.height = Math.floor(viewport.height * dpr);
-  canvas.style.width = `${Math.floor(viewport.width)}px`;
-  canvas.style.height = `${Math.floor(viewport.height)}px`;
   try {
     await page.render({ canvas, viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined }).promise;
-    if (gen !== doc.generation) return;
-    pv.el.classList.add('ready');
-    await new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: pv.textLayer, viewport }).render();
   } catch (err) {
-    if (gen === doc.generation && !(err instanceof Error && err.name === 'RenderingCancelledException')) console.error(err);
+    if (!(err instanceof Error && err.name === 'RenderingCancelledException')) console.error(err);
+    if (token === pv.token) pv.rendered = false;
+    return;
   }
-  if (gen === doc.generation) void decorate(pv);
+  if (token !== pv.token || gen !== doc.generation) return;
+  // Swap the finished canvas in; the old one stays visible until now.
+  pv.canvas.replaceWith(canvas);
+  pv.canvas = canvas;
+  pv.el.style.setProperty('--total-scale-factor', String(scale));
+  const textLayer = h('div', { class: 'textLayer' });
+  try {
+    await new pdfjs.TextLayer({ textContentSource: page.streamTextContent(), container: textLayer, viewport }).render();
+  } catch {
+    /* text selection is best-effort */
+  }
+  if (token !== pv.token) return;
+  pv.textLayer.replaceWith(textLayer);
+  pv.textLayer = textLayer;
+  if (!detached) void decorate(pv);
+  else queueMicrotask(() => void decorate(pv));
 }
 
 /** Render a page to a canvas of the given CSS width (thumbnails, grids, compare). */
@@ -181,48 +256,73 @@ export async function renderToCanvas(pdf: PDFDocumentProxy | PDFPageProxy, index
   const page = 'getPage' in pdf ? await pdf.getPage(index + 1) : pdf;
   const base = page.getViewport({ scale: 1 });
   const vp = page.getViewport({ scale: (cssWidth / base.width) * Math.min(2, window.devicePixelRatio || 1) });
-  canvas.width = Math.floor(vp.width);
-  canvas.height = Math.floor(vp.height);
+  // Draw off-screen, then copy, so an existing thumbnail never blanks.
+  const off = h('canvas', { width: Math.floor(vp.width), height: Math.floor(vp.height) });
+  await page.render({ canvas: off, viewport: vp }).promise.catch(() => {});
+  canvas.width = off.width;
+  canvas.height = off.height;
+  canvas.getContext('2d')!.drawImage(off, 0, 0);
   canvas.style.width = `${cssWidth}px`;
   canvas.style.height = `${(cssWidth * base.height) / base.width}px`;
-  await page.render({ canvas, viewport: vp }).promise.catch(() => {});
   return canvas;
 }
 
 // ---------------------------------------------------------------- thumbnails
 
-function buildThumbs(pages: PDFPageProxy[]) {
-  const io = new IntersectionObserver(
+function thumbTile(i: number, canvas: HTMLCanvasElement) {
+  const t = h(
+    'div',
+    { class: 'thumb', dataset: { index: String(i) }, draggable: true, title: 'Click to go to page · drag to reorder' },
+    h('div', { class: 'thumb-frame' }, canvas),
+    h('span', { class: 'thumb-num' }, String(i + 1)),
+  );
+  t.addEventListener('click', () => {
+    setCurrent(i);
+    scrollToPage(i);
+  });
+  wireReorder(t, i);
+  return t;
+}
+
+let thumbObserver: IntersectionObserver | null = null;
+
+async function buildThumbs(pages: PDFPageProxy[]) {
+  const gen = doc.generation;
+  thumbObserver?.disconnect();
+  const canvases = pages.map((page) => {
+    const vp = page.getViewport({ scale: 112 / page.getViewport({ scale: 1 }).width });
+    return h('canvas', { style: { width: '112px', height: `${vp.height}px` } });
+  });
+  // Draw the thumbnails around the current page before swapping the list in.
+  const first = Math.max(0, doc.current - 3);
+  const visible = canvases.slice(first, first + 8).map((c, k) => renderToCanvas(pages[first + k], first + k, 112, c));
+  await Promise.race([Promise.all(visible), new Promise((r) => setTimeout(r, 400))]);
+  if (gen !== doc.generation) return;
+  const done = new Set(Array.from({ length: Math.min(8, pages.length - first) }, (_, k) => first + k));
+  thumbObserver = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
-        io.unobserve(entry.target);
+        thumbObserver!.unobserve(entry.target);
         const i = Number((entry.target as HTMLElement).dataset.index);
-        void renderToCanvas(pages[i], i, 112, entry.target.querySelector('canvas')!);
+        if (!done.has(i)) void renderToCanvas(pages[i], i, 112, canvases[i]);
       }
     },
     { root: thumbsEl, rootMargin: '300px 0px' },
   );
-
-  const thumbs = pages.map((page, i) => {
-    const vp = page.getViewport({ scale: 112 / page.getViewport({ scale: 1 }).width });
-    const canvas = h('canvas', { style: { width: '112px', height: `${vp.height}px` } });
-    const t = h(
-      'div',
-      { class: 'thumb', dataset: { index: String(i) }, draggable: true, title: 'Click to go to page · drag to reorder' },
-      h('div', { class: 'thumb-frame' }, canvas),
-      h('span', { class: 'thumb-num' }, String(i + 1)),
-    );
-    t.addEventListener('click', () => {
-      setCurrent(i);
-      scrollToPage(i);
-    });
-    wireReorder(t, i);
-    io.observe(t);
-    return t;
-  });
-  thumbsEl.replaceChildren(...thumbs);
+  const tiles = pages.map((_, i) => thumbTile(i, canvases[i]));
+  thumbsEl.replaceChildren(...tiles);
+  tiles.forEach((t) => thumbObserver!.observe(t));
   highlightThumb();
+}
+
+/** Same layout: redraw only the changed thumbnails, in place. */
+function refreshThumbs(pages: PDFPageProxy[], changed: Set<number> | null) {
+  thumbsEl.querySelectorAll<HTMLElement>('.thumb').forEach((t, i) => {
+    if (changed && !changed.has(i)) return;
+    const canvas = t.querySelector('canvas');
+    if (canvas && canvas.width) void renderToCanvas(pages[i], i, 112, canvas);
+  });
 }
 
 /** Drag-to-reorder on any list of page tiles; dropping moves the page in the document. */
@@ -289,15 +389,41 @@ function updateCurrentFromScroll() {
   setCurrent(current);
 }
 
+let zoomTimer = 0;
+
+/**
+ * Zoom: resize the pages immediately (the current pixels stretch to fit),
+ * keep the same spot in view, then re-render visible pages sharply.
+ */
 export async function setZoom(scale: number | 'fit') {
-  if (!doc.pdf || !doc.bytes) return;
+  if (!doc.pdf || !view.views.length) return;
   view.fitWidth = scale === 'fit';
-  view.scale = scale === 'fit' ? fitScale() : Math.max(0.25, Math.min(4, scale));
+  const next = scale === 'fit' ? fitScale() : Math.max(0.25, Math.min(4, scale));
+  if (Math.abs(next - view.scale) < 1e-3) return emit('state');
   const page = doc.current;
-  const within = (viewerEl.scrollTop - (view.views[page]?.el.offsetTop ?? 0)) / Math.max(1, view.views[page]?.el.offsetHeight ?? 1);
-  buildViews(view.pages);
-  scrollToPage(page, 'instant', within * (view.views[page]?.el.offsetHeight ?? 0));
+  const anchorEl = view.views[page]?.el;
+  const within = anchorEl ? (viewerEl.scrollTop - anchorEl.offsetTop) / Math.max(1, anchorEl.offsetHeight) : 0;
+  view.scale = next;
+  for (const pv of view.views) {
+    pv.viewport = pv.page.getViewport({ scale: next });
+    pv.el.style.width = `${Math.floor(pv.viewport.width)}px`;
+    pv.el.style.height = `${Math.floor(pv.viewport.height)}px`;
+    pv.rendered = false;
+    pv.token++; // drop in-flight renders at the old scale
+    pv.textLayer.style.visibility = 'hidden'; // re-created at the new scale
+  }
+  const el = view.views[page]?.el;
+  if (el) viewerEl.scrollTop = el.offsetTop + within * el.offsetHeight;
+  redecorate();
   emit('state');
+  // Re-render once zooming pauses (Ctrl+wheel sends many steps).
+  clearTimeout(zoomTimer);
+  zoomTimer = window.setTimeout(() => {
+    for (const i of near) {
+      const pv = view.views[i];
+      if (pv && !pv.rendered) void renderPage(pv);
+    }
+  }, 120);
 }
 
 // ---------------------------------------------------------------- tools & decorations
@@ -371,13 +497,14 @@ export function setDecorator(key: string, fn: Decorator | null) {
 }
 
 export function redecorate() {
-  for (const pv of view.views) if (pv.rendered) void decorate(pv);
+  for (const pv of view.views) void decorate(pv);
 }
 
 async function decorate(pv: PageView) {
   const gen = doc.generation;
+  const scale = view.scale;
   const nodes = (await Promise.all([...decorators.values()].map((fn) => fn(pv)))).flat();
-  if (gen === doc.generation) pv.decor.replaceChildren(...nodes);
+  if (gen === doc.generation && scale === view.scale) pv.decor.replaceChildren(...nodes);
 }
 
 export const getView = (i: number) => view.views[i];

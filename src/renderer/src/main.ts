@@ -50,7 +50,7 @@ const MODES: Mode[] = [
   { id: 'home', label: 'Home', icon: 'home', blurb: '', hue: 0, needsDoc: false, noSide: true },
   {
     id: 'edit', label: 'Edit', icon: 'edit', hue: 258, needsDoc: true,
-    blurb: 'Add text, highlight, draw and white-out',
+    blurb: 'Edit and add text, highlight, draw and white-out',
     ribbon: annotateRibbon,
     leave: () => setTool('select'),
   },
@@ -284,6 +284,7 @@ function commands(): Command[] {
     { id: 'close', label: 'Close document', group: 'File', icon: 'close', enabled: hasDoc, run: closeDoc },
     { id: 'home', label: 'Go to Home', group: 'File', icon: 'home', run: () => setMode('home') },
     ...MODES.filter((m) => m.id !== 'home').map((m): Command => ({ id: `mode-${m.id}`, label: m.label, group: 'Tools', icon: m.icon, keywords: m.blurb, run: () => setMode(m.id) })),
+    toolCmd('edittext', 'Edit existing text', 'edit', 'E'),
     toolCmd('text', 'Add text', 'text', 'T'),
     toolCmd('highlight', 'Highlight', 'highlight', 'H'),
     toolCmd('whiteout', 'White-out', 'whiteout', 'W'),
@@ -376,7 +377,7 @@ document.addEventListener('keydown', (e) => {
     if (mode.id === 'edit') setTool('select');
     else if (mode.id !== 'redact' && mode.id !== 'prepare') setInteraction(null);
   } else if (!mod && !e.altKey && doc.pdf && mode.id === 'edit') {
-    const tools: Record<string, PenTool> = { v: 'select', t: 'text', h: 'highlight', w: 'whiteout', d: 'ink' };
+    const tools: Record<string, PenTool> = { v: 'select', e: 'edittext', t: 'text', h: 'highlight', w: 'whiteout', d: 'ink' };
     if (tools[key]) setTool(tools[key]);
   }
 });

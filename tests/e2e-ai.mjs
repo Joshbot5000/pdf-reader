@@ -106,7 +106,7 @@ const step = async (name, fn) => {
   console.log('ok');
 };
 
-await win.waitForSelector('.page.ready');
+await win.waitForSelector('.page .textLayer span');
 
 await step('summarize action streams a cited answer', async () => {
   await win.click('.ai-cta');

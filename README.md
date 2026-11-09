@@ -13,7 +13,7 @@ Everything except the AI Assistant runs on your computer; nothing is uploaded.
 | Tool | What it does |
 |---|---|
 | **Home** | Open or drop a PDF, recent files, launcher for every tool |
-| **Edit** | Add text, highlight (4 colours), white-out, freehand drawing; undo/redo |
+| **Edit** | **Edit text**: click any paragraph of the PDF's own text to change or delete it (the original is removed from the page, and the new text matches its size, colour and font style). Add new text, highlight (4 colours), white-out, freehand drawing; undo/redo |
 | **Search** | Live find with highlighted matches, match case, whole words; phrases match across line breaks |
 | **Organize** | Page grid with multi-select: rotate, delete, reorder by drag, insert blank pages or another PDF, extract pages to a new PDF |
 | **Fill & Sign** | Fill form fields; draw, type (3 script styles) or upload a signature and initials, saved for reuse; stamp the date |
@@ -74,6 +74,12 @@ On Linux without a display, prefix the e2e and screenshot commands with
 - `src/shared/pdfOps.ts` — every edit is a pure `bytes → bytes` function using
   pdf-lib. The app keeps previous versions on an undo stack and re-renders, so
   the screen always shows exactly what will be saved.
+- `src/shared/textEdit.ts` — edits a page's existing text: tokenizes the content
+  stream, simulates the text state to locate each text-drawing operator,
+  removes the selected ones (keeping the rest of each line in place) and draws
+  the replacement. `textBlocks.ts` groups text into editable paragraphs.
+- The viewer renders every page off-screen and swaps it in when complete, and
+  after an edit redraws only the pages that changed, so updates don't flicker.
 - `src/shared/search.ts`, `compare.ts` — text indexing, search, personal-data
   patterns and word-level diffing over pdf.js text.
 - `src/renderer/src/core` — the open document and the page viewer.
@@ -84,7 +90,12 @@ On Linux without a display, prefix the e2e and screenshot commands with
 - Added text uses Helvetica, so it supports Western European characters only.
 - Text, highlights, drawings and signatures are written into the page content,
   so they can be undone in this app but not moved later in other PDF apps.
-- Existing text can't be edited in place: cover it with White-out and add new text.
+- Edited paragraphs are redrawn in the closest standard font (Helvetica, Times or
+  Courier, with bold/italic), at the original size and colour, so a custom
+  typeface becomes its nearest standard equivalent. A paragraph with mixed
+  styles takes the style of its first line.
+- Rotated text, and text that is part of an image or graphic, can't be edited in
+  place; for graphics it is covered and replaced instead.
 - Redacting a page turns it into an image (with an OCR text layer if chosen),
   which removes its form fields and links.
 - OCR is English only.

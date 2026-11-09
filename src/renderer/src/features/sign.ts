@@ -247,6 +247,7 @@ export async function placeSignature(sig: SavedSignature) {
       const at = toPdf(pv, x - w / 2, y + hgt / 2);
       ghost.remove();
       const ok = await applyEdit((b) => addImage(b, { page: pv.index, image: dataUrlToBytes(sig.dataUrl), at, width: widthPt, height: heightPt }), {
+        pages: [pv.index],
         label: sig.kind === 'initials' ? 'Initials added' : 'Signature added',
       });
       if (ok && !e.shiftKey) stopPlacing();
@@ -267,7 +268,7 @@ export function placeDate() {
     async down(pv, e, x, y) {
       e.preventDefault();
       const size = 11;
-      await applyEdit((b) => addText(b, { page: pv.index, lines: [{ text: date, at: toPdf(pv, x, y + size * view.scale * 0.35) }], size, color: { r: 0.08, g: 0.08, b: 0.12 } }));
+      await applyEdit((b) => addText(b, { page: pv.index, lines: [{ text: date, at: toPdf(pv, x, y + size * view.scale * 0.35) }], size, color: { r: 0.08, g: 0.08, b: 0.12 } }), { pages: [pv.index] });
       stopPlacing();
     },
   });

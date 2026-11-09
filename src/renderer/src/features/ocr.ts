@@ -73,7 +73,7 @@ export async function ocrPages(pages: number[], opts: { title?: string; force?: 
     const ok = await applyEdit(async (b) => {
       for (const [i, list] of placements) if (list.length) b = await addInvisibleText(b, i, list);
       return b;
-    });
+    }, { pages: [...placements.keys()] });
     if (ok) {
       toast(`Recognised ${words.toLocaleString()} words on ${todo.length} page${todo.length > 1 ? 's' : ''}. The document is now searchable.`, 'success', 5000);
       if (banner) banner.hidden = true;

@@ -3,8 +3,9 @@ import { addInk, addRect, addText, type Color } from '../../../shared/pdfOps';
 import { applyEdit, doc } from '../core/doc';
 import { drag, setInteraction, toPdf, view, type Interaction, type PageView } from '../core/viewer';
 import { button, h } from '../ui/dom';
+import { closeTextEditor, createEditTextTool } from './textedit';
 
-export type Tool = 'select' | 'text' | 'highlight' | 'whiteout' | 'ink';
+export type Tool = 'select' | 'edittext' | 'text' | 'highlight' | 'whiteout' | 'ink';
 
 const SWATCHES = ['#d0021b', '#1f6feb', '#111111', '#2e7d32', '#7c5cff', '#ff7a00'];
 const HIGHLIGHTS: Record<string, Color> = {
@@ -31,6 +32,7 @@ const changed = () => listeners.forEach((f) => f());
 
 export function setTool(tool: Tool) {
   if (tool !== 'select' && !doc.editable) return;
+  if (tool !== 'edittext') closeTextEditor(true);
   pen.tool = tool;
   setInteraction(interactions[tool]);
   changed();
@@ -58,7 +60,7 @@ function rectTool(kind: 'highlight' | 'whiteout'): Interaction {
       const a = toPdf(pv, x0, y0);
       const b = toPdf(pv, x1, y1);
       const color = HIGHLIGHTS[pen.highlight];
-      await applyEdit((bytes) => addRect(bytes, { page: pv.index, a, b, kind, color }));
+      await applyEdit((bytes) => addRect(bytes, { page: pv.index, a, b, kind, color }), { pages: [pv.index] });
       box.remove();
     },
   };
@@ -93,7 +95,7 @@ const inkTool: Interaction = {
     });
     if (pts.length < 2) pts.push([x0 + 0.5, y0 + 0.5]); // a click makes a dot
     const points = pts.map(([x, y]) => toPdf(pv, x, y));
-    await applyEdit((b) => addInk(b, { page: pv.index, points, width, color: hexToColor(pen.color) }));
+    await applyEdit((b) => addInk(b, { page: pv.index, points, width, color: hexToColor(pen.color) }), { pages: [pv.index] });
     svg.remove();
   },
 };
@@ -108,6 +110,7 @@ const textTool: Interaction = {
 
 const interactions: Record<Tool, Interaction | null> = {
   select: null,
+  edittext: createEditTextTool((pv, x, y) => startTextDraft(pv, x, y)),
   text: textTool,
   highlight: rectTool('highlight'),
   whiteout: rectTool('whiteout'),
@@ -148,7 +151,7 @@ export function startTextDraft(
     if (!commit || !ta.value.trim()) return;
     const lineHeight = fontPx * 1.2;
     const edits = lines.map((text, i) => ({ text, at: toPdf(pv, x, y + i * lineHeight + fontPx * 0.9) }));
-    void applyEdit((b) => addText(b, { page: pv.index, lines: edits, size, color: hexToColor(color) }));
+    void applyEdit((b) => addText(b, { page: pv.index, lines: edits, size, color: hexToColor(color) }), { pages: [pv.index] });
   };
   ta.addEventListener('input', resize);
   ta.addEventListener('keydown', (e) => {
@@ -173,6 +176,7 @@ export function startTextDraft(
 export function annotateRibbon(): HTMLElement[] {
   const tools: { tool: Tool; label: string; icon: Parameters<typeof button>[0]['icon']; key: string }[] = [
     { tool: 'select', label: 'Select', icon: 'select', key: 'V' },
+    { tool: 'edittext', label: 'Edit text', icon: 'edit', key: 'E' },
     { tool: 'text', label: 'Add text', icon: 'text', key: 'T' },
     { tool: 'highlight', label: 'Highlight', icon: 'highlight', key: 'H' },
     { tool: 'whiteout', label: 'White-out', icon: 'whiteout', key: 'W' },
@@ -238,11 +242,14 @@ export function annotateRibbon(): HTMLElement[] {
     swatches.querySelectorAll<HTMLElement>('[data-color]').forEach((s) => s.classList.toggle('active', s.dataset.color === pen.color));
     hl.querySelectorAll<HTMLElement>('[data-hl]').forEach((s) => s.classList.toggle('active', s.dataset.hl === pen.highlight));
     hl.hidden = pen.tool !== 'highlight';
-    swatches.hidden = pen.tool === 'highlight' || pen.tool === 'whiteout';
+    swatches.hidden = pen.tool === 'highlight' || pen.tool === 'whiteout' || pen.tool === 'edittext';
+    size.hidden = pen.tool === 'edittext' || pen.tool === 'highlight' || pen.tool === 'whiteout';
+    hint.hidden = pen.tool !== 'edittext';
   };
+  const hint = h('span', { class: 'ribbon-note' }, 'Click any paragraph to change or delete it · click empty space to add text');
   listeners.clear();
   listeners.add(sync);
   sync();
   setInteraction(interactions[pen.tool]);
-  return [group, h('div', { class: 'ribbon-sep' }), swatches, hl, size];
+  return [group, h('div', { class: 'ribbon-sep' }), swatches, hl, size, hint];
 }

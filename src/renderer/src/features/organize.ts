@@ -41,6 +41,7 @@ async function build() {
   const pdf = doc.pdf;
   if (!pdf) return grid.replaceChildren();
   const gen = doc.generation;
+  const renders: Promise<unknown>[] = [];
   const tiles = Array.from({ length: pdf.numPages }, (_, i) => {
     // A fixed portrait frame keeps the grid aligned; landscape (rotated) pages are centred in it.
     const canvasWrap = h('div', { class: 'tile-canvas', style: { width: `${tileWidth}px`, height: `${Math.round(tileWidth * 1.414)}px` } });
@@ -76,10 +77,15 @@ async function build() {
       if (e.key === 'Delete' || e.key === 'Backspace') void remove(targets());
     });
     wireReorder(tile, i, true);
-    void fitTile(pdf, i).then((c) => gen === doc.generation && canvasWrap.append(c));
+    renders.push(fitTile(pdf, i).then((c) => gen === doc.generation && canvasWrap.append(c)));
     return tile;
   });
+  // Draw the new tiles off-screen first so the grid never flashes empty.
+  const scroll = grid.scrollTop;
+  await Promise.race([Promise.all(renders), new Promise((r) => setTimeout(r, 900))]);
+  if (gen !== doc.generation || !active) return;
   grid.replaceChildren(h('div', { class: 'tile-grid', role: 'listbox', attrs: { 'aria-multiselectable': 'true' } }, ...tiles));
+  grid.scrollTop = scroll;
   updateSelectionUi();
 }
 
