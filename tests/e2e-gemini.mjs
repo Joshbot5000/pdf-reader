@@ -38,6 +38,12 @@ const server = createServer(async (req, res) => {
     res.end(JSON.stringify({ error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } }));
     return;
   }
+  if (model === 'gemini-9.5-flash') {
+    // Older model not offered to this account (not a quota error): skip it too.
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { code: 403, message: 'This model is not available to new users.', status: 'PERMISSION_DENIED' } }));
+    return;
+  }
   const json = JSON.parse(body);
   if (method === 'generateContent') {
     const outline = { title: 'Tenancy Essentials', subtitle: 'What the tenant needs to know', slides: [
@@ -49,6 +55,12 @@ const server = createServer(async (req, res) => {
     return;
   }
   const turn = json.contents.filter((c) => c.role === 'user').length;
+  if (turn === 1 && !/IMPORTANT: Answer entirely in your own words/.test(json.systemInstruction.parts[0].text)) {
+    // First try stops for "recitation" before any text: the app should retry asking to paraphrase.
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: 'RECITATION' }] })}\r\n\r\n`);
+    return;
+  }
   const chunks = turn === 1
     ? ['The rent is **£1,850 per month** [p. 1], paid ', 'in advance. The deposit is protected [p. 1].']
     : ['The landlord repairs the structure [p. 1].'];
@@ -100,13 +112,22 @@ await step('Gemini is the default provider and needs no Claude key', async () =>
   assert.match(await win.locator('.assistant-model').innerText(), /Gemini · free/);
 });
 
-await step('falls back from an exhausted model and streams a cited answer', async () => {
+await step('skips unavailable models, retries a recitation stop, and streams a cited answer', async () => {
   await win.click('#assistant .chip.action:has-text("Summarize")');
   await win.waitForSelector('#assistant .msg.assistant .md strong');
   const posts = requests.filter((r) => r.method === 'POST');
-  assert.deepEqual(posts.map((r) => r.path.split('/').pop()), ['gemini-9.9-flash:streamGenerateContent', 'gemini-9.5-flash:streamGenerateContent']);
+  assert.deepEqual(posts.map((r) => r.path.split('/').pop()), [
+    'gemini-9.9-flash:streamGenerateContent', // 429 quota used up
+    'gemini-9.5-flash:streamGenerateContent', // 403 not offered to this account
+    'gemini-9.9-flash-lite:streamGenerateContent', // RECITATION, no text
+    'gemini-9.9-flash', // retry on the same chain…
+    'gemini-9.5-flash',
+    'gemini-9.9-flash-lite:streamGenerateContent', // …succeeds
+  ].map((p) => (p.includes(':') ? p : `${p}:streamGenerateContent`)));
   assert.equal(posts[0].headers['x-goog-api-key'], 'AIza-test-mock');
-  const body = posts[1].body;
+  assert.equal(posts[2].body.generationConfig, undefined, 'no output cap (thinking models need room)');
+  assert.match(posts[5].body.systemInstruction.parts[0].text, /IMPORTANT: Answer entirely in your own words/);
+  const body = posts[5].body;
   assert.match(body.systemInstruction.parts[0].text, /\[p\. 3\]/);
   const [pdfPart, question] = body.contents[0].parts;
   assert.equal(pdfPart.inline_data.mime_type, 'application/pdf');
@@ -141,6 +162,14 @@ await step('remix into slides uses structured JSON output', async () => {
   const req = requests.filter((r) => r.path.endsWith(':generateContent')).pop().body;
   assert.equal(req.generationConfig.responseMimeType, 'application/json');
   assert.equal(req.generationConfig.responseSchema.type, 'OBJECT');
+  await win.keyboard.press('Escape');
+});
+
+await step('Settings can test the Gemini connection', async () => {
+  await win.click('.rail-btn[title="Settings"]');
+  await win.click('.modal button:has-text("Test connection")');
+  await win.waitForSelector('.test-result.ok');
+  assert.match(await win.locator('.test-result').innerText(), /Connected\. Using gemini-9\.9-flash-lite/);
   await win.keyboard.press('Escape');
 });
 

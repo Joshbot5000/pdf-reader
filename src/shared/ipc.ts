@@ -164,6 +164,8 @@ export interface DesktopApi {
   onSaveAndClose(cb: () => void): void;
   closeWindow(): void;
   findFont(pdfFontName: string, hint: { bold?: boolean; italic?: boolean }): Promise<Uint8Array | null>;
+  /** Installed font families (for the font picker). */
+  listFonts(): Promise<string[]>;
   takePendingOpen(): Promise<string | null>;
   pathForFile(file: File): string;
   onMenu(cb: (action: MenuAction) => void): void;
@@ -178,6 +180,8 @@ export interface DesktopApi {
   aiSetKey(provider: 'gemini' | 'claude', key: string | null): Promise<void>;
   /** Free Gemini models this key can use (best first). */
   aiGeminiModels(): Promise<string[]>;
+  /** Send a tiny request with the saved Gemini key: which model works, or Google's error. */
+  aiTestGemini(): Promise<{ ok: boolean; model: string | null; message: string }>;
   aiChat(req: AiChatRequest): Promise<string>;
   aiCancel(requestId: string): void;
   aiForget(conversationId: string): void;

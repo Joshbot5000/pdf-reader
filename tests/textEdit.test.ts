@@ -152,3 +152,94 @@ describe('matching the original font', () => {
     expect([...map]).toEqual([[' ', 3], ['A', 16], ['B', 17], ['C', 18], ['a', 32], ['b', 33]]);
   });
 });
+
+describe('keeping the exact original formatting', () => {
+  /** Bold 16pt heading sitting tightly above an 11pt regular paragraph (as in many Word documents). */
+  async function headingAndParagraph() {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([600, 800]);
+    const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+    const reg = await doc.embedFont(StandardFonts.Helvetica);
+    page.drawText('4. Rent', { x: 50, y: 713, size: 16, font: bold, color: rgb(0.2, 0.1, 0.6) });
+    page.drawText('The rent is 1,850 per calendar month, payable', { x: 50, y: 700, size: 11, font: reg });
+    page.drawText('in advance on the first day of each month.', { x: 50, y: 687, size: 11, font: reg });
+    return doc.save();
+  }
+  // The paragraph as the editor sees it: two lines, with a box that also reaches up into the heading.
+  const region = {
+    page: 0,
+    box: { x: 50, y: 684, width: 260, height: 30 },
+    lines: [
+      { y: 700, x0: 50, x1: 290, size: 11 },
+      { y: 687, x0: 50, x1: 270, size: 11 },
+    ],
+  };
+
+  it('never picks up the heading above, and keeps size, weight and colour', async () => {
+    const before = await headingAndParagraph();
+    expect(await inspectTextStyle(before, region)).toMatchObject({ fontSize: 11, bold: false, fontName: 'Helvetica' });
+    const r = await replaceText(before, { ...region, text: 'The rent is 1,900 per calendar month.' });
+    expect(r.removed).toBe(2);
+    expect(r.font).toEqual({ kind: 'original', name: 'Helvetica' });
+    const doc = await getDocument({ data: r.bytes.slice(), verbosity: 0 }).promise;
+    const tc = await (await doc.getPage(1)).getTextContent();
+    const its = tc.items.filter((i: any) => i.str.trim()) as any[];
+    const heading = its.find((i) => i.str === '4. Rent');
+    const para = its.find((i) => i.str.startsWith('The rent is 1,900'));
+    expect(heading).toBeTruthy(); // heading untouched
+    expect(heading.transform[5]).toBeCloseTo(713, 1);
+    expect(para.transform[0]).toBeCloseTo(11, 1); // same size, not the heading's 16
+    expect(para.transform[4]).toBeCloseTo(50, 1);
+    expect(para.transform[5]).toBeCloseTo(700, 1);
+  });
+
+  it('keeps character spacing and horizontal scaling', async () => {
+    const before = await rawPage('BT /F1 12 Tf 1.5 Tc 80 Tz 50 300 Td (Spaced out) Tj ET');
+    const w0 = (await items(before))[0];
+    const r = await replaceText(before, { page: 0, box: { x: 45, y: 295, width: 200, height: 16 }, lines: [{ y: 300, x0: 50, x1: 200, size: 12 }], text: 'Spaced out' });
+    const doc = await getDocument({ data: r.bytes.slice(), verbosity: 0 }).promise;
+    const it = (await (await doc.getPage(1)).getTextContent()).items.find((i: any) => i.str === 'Spaced out') as any;
+    const orig = (await (await (await getDocument({ data: before.slice(), verbosity: 0 }).promise).getPage(1)).getTextContent()).items[0] as any;
+    expect(it.width).toBeCloseTo(orig.width, 0);
+    expect(it.transform[4]).toBeCloseTo(w0.x, 1);
+  });
+
+  it('applies the formatting the user chooses: font, size, bold, italic, underline, colour', async () => {
+    const before = await headingAndParagraph();
+    const r = await replaceText(before, {
+      ...region,
+      text: 'Formatted text',
+      format: { family: 'Courier', size: 14, bold: true, italic: true, underline: true, color: { r: 0.8, g: 0, b: 0 } },
+    });
+    expect(r.font).toEqual({ kind: 'standard', name: 'Courier-BoldOblique' });
+    const doc = await getDocument({ data: r.bytes.slice(), verbosity: 0 }).promise;
+    const page = await doc.getPage(1);
+    const it = (await page.getTextContent()).items.find((i: any) => i.str === 'Formatted text') as any;
+    expect(it.transform[0]).toBeCloseTo(14, 1);
+    // The underline is drawn as a line just below the baseline.
+    const ops = await page.getOperatorList();
+    const { OPS } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+    expect(ops.fnArray.filter((f: number) => f === OPS.stroke || f === OPS.constructPath).length).toBeGreaterThan(0);
+  });
+});
+
+describe('line breaks', () => {
+  it('re-wraps an unchanged paragraph exactly where it broke before (standard fonts measured correctly)', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([600, 800]);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const l1 = 'This agreement is made between Harbour Properties Ltd (the Landlord) and Jordan Ellis (the';
+    const l2 = 'Tenant), email jordan.ellis@example.com, telephone 020 7946 0958.';
+    page.drawText(l1, { x: 56, y: 700, size: 11, font });
+    page.drawText(l2, { x: 56, y: 684, size: 11, font });
+    const w1 = font.widthOfTextAtSize(l1, 11);
+    const r = await replaceText(await doc.save(), {
+      page: 0,
+      box: { x: 56, y: 680, width: w1, height: 30 },
+      lines: [{ y: 700, x0: 56, x1: 56 + w1, size: 11 }, { y: 684, x0: 56, x1: 56 + font.widthOfTextAtSize(l2, 11), size: 11 }],
+      text: `${l1} ${l2}`,
+    });
+    expect((await items(r.bytes)).map((i) => i.str)).toEqual([l1, l2]);
+    expect(r.overflow).toBe(false);
+  });
+});

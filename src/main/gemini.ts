@@ -23,7 +23,7 @@ Answer questions about the documents the user has provided at the start of the c
 - Ground every answer in those documents. If they don't contain the answer, say so plainly, then offer general knowledge clearly labelled as such.
 - Cite where information comes from, right after the statement, in square brackets: [p. 3] for a page of a PDF (the first page is p. 1). When there are several documents, include the document's title: [Lease.pdf, p. 3]. For a document without pages, use its title: [Notes].
 - Write in clear Markdown: short paragraphs, bullet lists, **bold** for key terms, and headings only for longer answers.
-- Be precise with names, dates, figures and defined terms; quote exact wording when it matters (for example contract clauses or statutory language).
+- Be precise with names, dates, figures and defined terms. Explain in your own words; when exact wording matters (a contract clause, a statutory phrase), quote only the key words, never more than a sentence at a time.
 - You cannot see edits the user makes after the conversation started.`;
 
 type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
@@ -149,11 +149,78 @@ async function post(path: (model: string) => string, body: unknown, signal?: Abo
     }
     const text = await res.text();
     last = new GeminiError(describe(res.status, text), res.status);
-    // Out of quota, or the model isn't available to this key: try the next one.
-    if (res.status === 429 || res.status === 404 || (res.status === 400 && /not (found|supported)/i.test(text))) continue;
-    throw last;
+    console.warn(`Gemini ${model} → HTTP ${res.status}: ${text.slice(0, 500)}`);
+    // A bad key fails the same way on every model: stop. Anything else (quota
+    // used up, model retired or not offered to this account, overloaded):
+    // try the next model.
+    if (res.status === 401 || (res.status === 400 && /api[_ ]?key/i.test(text))) throw last;
   }
   throw last ?? new Error('No Gemini model is available for this key.');
+}
+
+// ---------------------------------------------------------------- streaming
+
+/** Read a streamed (SSE) response, passing answer text to `onText`. */
+async function readStream(res: Response, onText: (t: string) => void) {
+  let blocked: string | null = null;
+  let finish: string | null = null;
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const handle = (chunk: string) => {
+    const data = chunk.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+    if (!data) return;
+    const json = JSON.parse(data) as {
+      candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
+      promptFeedback?: { blockReason?: string };
+      error?: { code?: number; message?: string };
+    };
+    if (json.error) throw new GeminiError(describe(json.error.code ?? 500, JSON.stringify(json)), json.error.code ?? 500);
+    if (json.promptFeedback?.blockReason) blocked = json.promptFeedback.blockReason;
+    const cand = json.candidates?.[0];
+    for (const part of cand?.content?.parts ?? []) if (part.text && !part.thought) onText(part.text);
+    if (cand?.finishReason) finish = cand.finishReason;
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut;
+    while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
+      handle(buffer.slice(0, cut));
+      buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, '');
+    }
+  }
+  if (buffer.trim()) handle(buffer);
+  return { blocked, finish } as { blocked: string | null; finish: string | null };
+}
+
+/** A clear explanation when Gemini ends without an answer. */
+function finishMessage(reason: string | null): string {
+  switch (reason) {
+    case 'RECITATION':
+      return 'Gemini stopped because its answer repeated too much of the document word for word. Try asking for a summary “in your own words”, or about a smaller section.';
+    case 'SAFETY':
+    case 'BLOCKED':
+    case 'PROHIBITED_CONTENT':
+    case 'BLOCKLIST':
+      return 'Gemini’s safety filter blocked this answer. Try rephrasing the question.';
+    case 'MAX_TOKENS':
+      return 'Gemini ran out of room before answering. Try a narrower question or a shorter document.';
+    default:
+      return `Gemini returned no answer${reason ? ` (${reason})` : ''}. Please try again.`;
+  }
+}
+
+/** Send a tiny request to check the key and find a working model. */
+export async function testConnection(): Promise<{ ok: boolean; model: string | null; message: string }> {
+  try {
+    const res = await post(() => 'generateContent', { contents: [{ role: 'user', parts: [{ text: 'Reply with the single word: OK' }] }] });
+    await res.json();
+    return { ok: true, model: lastModel, message: `Connected. Using ${lastModel}.` };
+  } catch (err) {
+    return { ok: false, model: null, message: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 // ---------------------------------------------------------------- chat
@@ -194,44 +261,31 @@ export async function chat(sender: WebContents, req: AiChatRequest): Promise<str
     let answer = '';
     try {
       emit({ requestId, type: 'thinking' });
-      const res = await post(
-        () => 'streamGenerateContent?alt=sse',
-        { systemInstruction: { parts: [{ text: conversation.system }] }, contents: conversation.contents, generationConfig: { maxOutputTokens: 8192 } },
-        controller.signal,
-      );
-      let blocked: string | null = null;
       let finish: string | null = null;
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let cut;
-        while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
-          const chunk = buffer.slice(0, cut);
-          buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, '');
-          const data = chunk.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
-          if (!data) continue;
-          const json = JSON.parse(data) as {
-            candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
-            promptFeedback?: { blockReason?: string };
-          };
-          if (json.promptFeedback?.blockReason) blocked = json.promptFeedback.blockReason;
-          const cand = json.candidates?.[0];
-          for (const part of cand?.content?.parts ?? []) {
-            if (part.text && !part.thought) {
-              answer += part.text;
-              emit({ requestId, type: 'delta', text: part.text });
-            }
-          }
-          if (cand?.finishReason) finish = cand.finishReason;
-        }
+      let blocked: string | null = null;
+      // Gemini sometimes stops an answer that repeats source text word for word
+      // ("RECITATION"); if that happens before any text, retry once asking it to paraphrase.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const system =
+          attempt === 0
+            ? conversation.system
+            : `${conversation.system}\n\nIMPORTANT: Answer entirely in your own words. Do not reproduce passages from the documents; quote at most a few words.`;
+        const res = await post(
+          () => 'streamGenerateContent?alt=sse',
+          // No output cap: newer models think before answering, and a cap can end the reply before it starts.
+          { systemInstruction: { parts: [{ text: system }] }, contents: conversation.contents },
+          controller.signal,
+        );
+        ({ finish, blocked } = await readStream(res, (t) => {
+          answer += t;
+          emit({ requestId, type: 'delta', text: t });
+        }));
+        if (answer || blocked || finish !== 'RECITATION') break;
       }
-      if (blocked || (!answer && finish && finish !== 'STOP')) {
+      if (!answer) {
         conversation.contents.pop();
-        emit({ requestId, type: 'error', message: 'Gemini declined to answer this request.' });
+        if (conversation.contents.length === 0) conversations.delete(req.conversationId);
+        emit({ requestId, type: 'error', message: finishMessage(blocked ? 'BLOCKED' : finish) });
         return;
       }
       conversation.contents.push({ role: 'model', parts: [{ text: answer }] });

@@ -4,11 +4,12 @@
  * and the new text is drawn in the closest standard font, size and colour.
  */
 import { blockAt, buildBlocks, type Block } from '../../../shared/textBlocks';
-import { inspectTextStyle, replaceText, type TextStyle } from '../../../shared/textEdit';
+import { inspectTextStyle, replaceText, type TextFormat, type TextStyle } from '../../../shared/textEdit';
 import { api, applyEdit, doc, on, pageText } from '../core/doc';
 import { toPdf, toViewport, view, type Interaction, type PageView } from '../core/viewer';
 import { button, h } from '../ui/dom';
 import { toast } from '../ui/overlays';
+import { createFormatBar, cssFamily, type FormatState } from '../ui/formatbar';
 
 const blockCache = new Map<number, Block[]>();
 let cacheGen = -1;
@@ -40,6 +41,11 @@ const CSS_FAMILY: Record<TextStyle['family'], string> = {
   sans: 'Helvetica, Arial, sans-serif',
   serif: "'Times New Roman', Times, serif",
   mono: "'Courier New', Courier, monospace",
+};
+
+const hexColor = (hex: string) => {
+  const n = parseInt(hex.slice(1), 16);
+  return { r: ((n >> 16) & 255) / 255, g: ((n >> 8) & 255) / 255, b: (n & 255) / 255 };
 };
 
 const toHex = (c: TextStyle['color']) =>
@@ -82,10 +88,13 @@ export function closeTextEditor(commit = true) {
 async function openEditor(pv: PageView, block: Block) {
   closeTextEditor(true);
   if (!doc.bytes) return;
-  const region = { page: pv.index, box: block.box };
+  // The paragraph's own lines, so neighbouring text (e.g. a heading) is never included.
+  const region = { page: pv.index, box: block.box, lines: block.lines.map(({ y, x0, x1, size }) => ({ y, x0, x1, size })) };
   const detected = await inspectTextStyle(doc.bytes, region).catch(() => null);
   const style: TextStyle = detected ?? { fontSize: block.size, color: { r: 0, g: 0, b: 0 }, family: 'sans', bold: false, italic: false };
   const s = view.scale;
+  const docFamily = `${block.fontName ? `"${block.fontName}", ` : ''}${CSS_FAMILY[style.family]}`;
+  const initial: FormatState = { family: '', size: style.fontSize, bold: style.bold, italic: style.italic, underline: false, color: toHex(style.color) };
   const fontPx = style.fontSize * s;
   const linePx = (block.lineGap || style.fontSize * 1.2) * s;
   const r = viewRect(pv, block.box);
@@ -111,23 +120,36 @@ async function openEditor(pv: PageView, block: Block) {
       fontSize: `${fontPx}px`,
       lineHeight: `${linePx}px`,
       // The document's own font (already loaded by pdf.js), then a close fallback.
-      fontFamily: `${block.fontName ? `"${block.fontName}", ` : ''}${CSS_FAMILY[style.family]}`,
+      fontFamily: docFamily,
       fontWeight: style.bold ? '700' : '400',
       fontStyle: style.italic ? 'italic' : 'normal',
       color: toHex(style.color),
     },
   });
   const done = button({ label: 'Done', icon: 'check', kind: 'primary', onClick: () => finish(true) });
-  const del = button({ label: 'Delete text', icon: 'trash', kind: 'ghost', onClick: () => finish(true, '') });
+  const del = button({ icon: 'trash', title: 'Delete this text', kind: 'ghost', onClick: () => finish(true, '') });
   const cancel = button({ icon: 'close', title: 'Cancel (Esc)', kind: 'ghost', onClick: () => finish(false) });
+  // Live preview of formatting changes in the editor.
+  const preview = (f: FormatState) => {
+    Object.assign(ta.style, {
+      fontFamily: f.family ? cssFamily(f.family, CSS_FAMILY[style.family]) : docFamily,
+      fontSize: `${f.size * s}px`,
+      lineHeight: `${(linePx * f.size) / style.fontSize}px`,
+      fontWeight: f.bold ? '700' : '400',
+      fontStyle: f.italic ? 'italic' : 'normal',
+      textDecoration: f.underline ? 'underline' : 'none',
+      color: f.color,
+    });
+    autosize();
+    // Return to the text after choosing an option, but not while typing a size.
+    if (!(document.activeElement instanceof HTMLInputElement)) ta.focus();
+  };
+  const formatBar = createFormatBar(initial, prettyFont(style), preview);
   const bar = h(
     'div',
-    { class: 'edit-bar', style: { left: `${r.left - 1}px`, top: `${Math.max(4, top - 46)}px` } },
-    h(
-      'span',
-      { class: 'edit-bar-label', title: 'The font used in the document' },
-      `${prettyFont(style)} · ${Math.round(style.fontSize * 10) / 10} pt`,
-    ),
+    { class: 'edit-bar', style: { left: `${r.left - 1}px`, top: `${Math.max(4, top - 50)}px` } },
+    formatBar.el,
+    h('span', { class: 'fmt-sep' }),
     del,
     cancel,
     done,
@@ -149,28 +171,47 @@ async function openEditor(pv: PageView, block: Block) {
       ta.remove();
       bar.remove();
     };
-    if (!commit || text.trim() === original) return remove();
+    // Only what the user explicitly changed is sent; everything else keeps the original.
+    const f = formatBar.value();
+    const format: TextFormat = {};
+    if (f.family) format.family = f.family;
+    if (Math.abs(f.size - style.fontSize) > 0.05) format.size = f.size;
+    if (f.bold !== style.bold) format.bold = f.bold;
+    if (f.italic !== style.italic) format.italic = f.italic;
+    if (f.underline) format.underline = true;
+    if (f.color.toLowerCase() !== toHex(style.color).toLowerCase()) format.color = hexColor(f.color);
+    const formatChanged = Object.keys(format).length > 0;
+    if (!commit || (text.trim() === original && !formatChanged)) return remove();
     // Keep the editor visible until the new page version is drawn, so nothing flickers.
     ta.readOnly = true;
     let method: 'edited' | 'covered' = 'edited';
     let usedFont: { kind: string; name: string } = { kind: 'original', name: '' };
+    let overflow = false;
     void applyEdit(
       async (bytes) => {
-        // The same typeface from this computer, for characters the PDF's copy lacks.
-        const fontData = text.trim() && style.fontName ? await api.findFont(style.fontName, { bold: style.bold, italic: style.italic }).catch(() => null) : null;
-        const res = await replaceText(bytes, { ...region, text, style, fontData });
+        // A font from this computer: the one picked, or the document's own
+        // typeface (for characters its embedded copy lacks, or a new weight).
+        const want = format.family ?? style.fontName;
+        const fontData = text.trim() && want ? await api.findFont(want, { bold: f.bold, italic: f.italic }).catch(() => null) : null;
+        const res = await replaceText(bytes, { ...region, text, style, fontData, format });
         method = res.method;
         usedFont = res.font;
+        overflow = res.overflow;
         return res.bytes;
       },
       { pages: [pv.index], label: text.trim() ? 'Text updated' : 'Text deleted' },
     ).then((ok) => {
       // Give the swapped-in page a frame to paint before removing the editor.
       requestAnimationFrame(() => requestAnimationFrame(remove));
-      if (ok && method === 'covered') {
+      if (ok && overflow) {
+        toast('The edited text needs more lines than the original, so it may run into the text below. A PDF can’t push the rest of the page down; make the text shorter or smaller if it overlaps.', 'info', 9000);
+      } else if (ok && method === 'covered') {
         toast('That text is part of an image or graphic, so it was covered and replaced rather than edited.', 'info', 6000);
-      } else if (ok && usedFont.kind === 'standard' && style.fontName) {
-        toast(`“${prettyFont(style)}” isn’t installed on this computer, so ${usedFont.name.replace(/-/g, ' ')} was used for this edit.`, 'info', 7000);
+      } else if (ok && usedFont.kind === 'standard' && (format.family || style.fontName)) {
+        const wanted = format.family ?? prettyFont(style);
+        if (!/^(helvetica|times new roman|times|courier)$/i.test(wanted)) {
+          toast(`“${wanted}” isn’t available on this computer, so ${usedFont.name.replace(/-/g, ' ')} was used for this edit.`, 'info', 7000);
+        }
       }
     });
   }
@@ -178,6 +219,7 @@ async function openEditor(pv: PageView, block: Block) {
   ta.addEventListener('input', autosize);
   ta.addEventListener('keydown', (e) => {
     e.stopPropagation();
+    if (formatBar.shortcut(e)) return;
     if (e.key === 'Escape') finish(false);
     else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -188,8 +230,19 @@ async function openEditor(pv: PageView, block: Block) {
     if (bar.contains(e.relatedTarget as Node)) return;
     finish(true);
   });
-  // Clicks on the bar shouldn't blur-commit before the button handles them.
-  bar.addEventListener('pointerdown', (e) => e.preventDefault());
+  // Clicking the bar's buttons shouldn't blur-commit the edit; the font list
+  // and size box still take focus normally (blur ignores focus moving into the bar).
+  bar.addEventListener('pointerdown', (e) => {
+    if ((e.target as HTMLElement).closest('button')) e.preventDefault();
+  });
+  bar.addEventListener('focusout', (e) => {
+    const to = e.relatedTarget as Node | null;
+    if (to && (to === ta || bar.contains(to))) return;
+    // Focus left both the text box and the bar: treat as clicking away.
+    setTimeout(() => {
+      if (!bar.contains(document.activeElement) && document.activeElement !== ta) finish(true);
+    });
+  });
 
   pv.overlay.append(cover, ta, bar);
   editing = { pv, block, finish };

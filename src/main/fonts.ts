@@ -198,6 +198,18 @@ export async function findFont(pdfName: string, hint: { bold?: boolean; italic?:
   return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
+/** Installed font families that can be embedded, for the font picker. */
+export async function listFamilies(): Promise<string[]> {
+  const fonts = await buildIndex();
+  const names = new Set<string>();
+  for (const f of fonts) {
+    const fam = f.family.trim();
+    if (!fam || fam.startsWith('.') || /^(lastresort|apple color emoji|noto color emoji)$/i.test(fam)) continue;
+    names.add(fam);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
+
 /** Start indexing in the background so the first edit doesn't wait. */
 export function warmFontIndex() {
   void buildIndex();

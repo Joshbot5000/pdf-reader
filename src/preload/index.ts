@@ -15,6 +15,7 @@ const api: DesktopApi = {
   },
   closeWindow: () => ipcRenderer.send('app:closeWindow'),
   findFont: (name, hint) => ipcRenderer.invoke('fonts:find', name, hint),
+  listFonts: () => ipcRenderer.invoke('fonts:list'),
   takePendingOpen: () => ipcRenderer.invoke('app:takePendingOpen'),
   pathForFile: (file) => webUtils.getPathForFile(file),
   onMenu: (cb) => {
@@ -32,6 +33,7 @@ const api: DesktopApi = {
   aiStatus: () => ipcRenderer.invoke('ai:status'),
   aiSetKey: (provider, key) => ipcRenderer.invoke('ai:setKey', provider, key),
   aiGeminiModels: () => ipcRenderer.invoke('ai:geminiModels'),
+  aiTestGemini: () => ipcRenderer.invoke('ai:testGemini'),
   aiChat: (req) => ipcRenderer.invoke('ai:chat', req),
   aiCancel: (id) => ipcRenderer.send('ai:cancel', id),
   aiForget: (id) => ipcRenderer.send('ai:forget', id),

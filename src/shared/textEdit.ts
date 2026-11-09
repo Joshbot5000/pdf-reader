@@ -31,6 +31,7 @@ import {
   rgb,
 } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
+import { Encodings, Font as StandardFontMetrics } from '@pdf-lib/standard-fonts';
 import { EditError, type Bytes, type Color, type Rect } from './pdfOps';
 
 // ======================================================================= tokenizer
@@ -288,6 +289,30 @@ function lookupArray(doc: PDFDocument, o: unknown): PDFArray | undefined {
   return v instanceof PDFArray ? v : undefined;
 }
 
+const STANDARD_14 = new Set([
+  'Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique',
+  'Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic',
+  'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique',
+]);
+let winAnsiNames: Map<number, string> | null = null;
+
+/** Real glyph widths for the standard 14 fonts, which PDFs may use without a /Widths table. */
+function standardWidths(name: string): ((code: number) => number) | null {
+  if (!STANDARD_14.has(name)) return null;
+  const metrics = StandardFontMetrics.load(name as never);
+  if (!winAnsiNames) {
+    winAnsiNames = new Map();
+    for (const cp of Encodings.WinAnsi.supportedCodePoints) {
+      const { code, name: glyph } = Encodings.WinAnsi.encodeUnicodeCodePoint(cp);
+      winAnsiNames.set(code, glyph);
+    }
+  }
+  return (code) => {
+    const glyph = winAnsiNames!.get(code);
+    return (glyph && (metrics.getWidthOfGlyph(glyph) as number | undefined)) || (name.startsWith('Courier') ? 600 : 500);
+  };
+}
+
 function fontInfo(doc: PDFDocument, dict: PDFDict | undefined): FontInfo {
   const fallback: FontInfo = { codeLength: 1, width: () => 500, baseFont: '', serif: false, mono: false, toCode: null, toCodeSource: null, fullyUsable: false };
   if (!dict) return fallback;
@@ -325,7 +350,8 @@ function fontInfo(doc: PDFDocument, dict: PDFDict | undefined): FontInfo {
     const ws = lookupArray(doc, dict.get(PDFName.of('Widths')));
     const missing = num(doc, descriptor?.get(PDFName.of('MissingWidth')), /Courier/i.test(base) ? 600 : /Times/i.test(base) ? 500 : 556);
     const table = ws ? Array.from({ length: ws.size() }, (_, k) => num(doc, ws.get(k), missing)) : [];
-    widthFn = (c) => table[c - first] ?? missing;
+    const std = ws ? null : standardWidths(base.replace(/^[A-Z]{6}\+/, ''));
+    widthFn = std ?? ((c) => table[c - first] ?? missing);
   }
   const flags = num(doc, descriptor?.get(PDFName.of('Flags')), 0);
   const name = base.replace(/^[A-Z]{6}\+/, '');
@@ -384,6 +410,12 @@ export interface TextShow {
   fontRes: string;
   renderMode: number;
   text: string;
+  /** Number of character codes drawn (for finding a paragraph's dominant style). */
+  chars: number;
+  /** Character spacing, word spacing (text-space units) and horizontal scaling (1 = 100%). */
+  tc: number;
+  tw: number;
+  th: number;
 }
 
 interface GState {
@@ -432,6 +464,7 @@ export function simulateText(doc: PDFDocument, ops: Op[], fonts: PDFDict | undef
     const vScale = Math.hypot(trm[2], trm[3]);
     let disp = 0;
     let text = '';
+    let chars = 0;
     for (const it of items) {
       if (it.t === 'num') {
         disp += (-it.v / 1000) * gs.fontSize;
@@ -440,6 +473,7 @@ export function simulateText(doc: PDFDocument, ops: Op[], fonts: PDFDict | undef
         for (let k = 0; k + gs.font.codeLength <= bytes.length; k += gs.font.codeLength) {
           const code = gs.font.codeLength === 2 ? (bytes[k] << 8) | bytes[k + 1] : bytes[k];
           disp += (gs.font.width(code) / 1000) * gs.fontSize + gs.tc + (gs.font.codeLength === 1 && code === 32 ? gs.tw : 0);
+          chars++;
           if (gs.font.codeLength === 1 && code >= 32) text += String.fromCharCode(code);
         }
       }
@@ -457,6 +491,10 @@ export function simulateText(doc: PDFDocument, ops: Op[], fonts: PDFDict | undef
       fontRes: gs.fontRes,
       renderMode: gs.tr,
       text,
+      chars,
+      tc: gs.tc,
+      tw: gs.tw,
+      th: gs.th,
     });
     tm = mul([1, 0, 0, 1, disp * gs.th, 0], tm);
   };
@@ -590,15 +628,54 @@ export interface TextStyle {
   fontName?: string;
 }
 
+export interface TextLine {
+  /** Baseline y and horizontal extent in user space. */
+  y: number;
+  x0: number;
+  x1: number;
+  size: number;
+}
+
 export interface TextRegion {
   page: number;
   /** Selected box in PDF user space. */
   box: Rect;
+  /**
+   * The paragraph's lines. When given, only text sitting on these baselines is
+   * edited, so a heading just above or below can never be swept in.
+   */
+  lines?: TextLine[];
 }
 
 function inBox(s: TextShow, box: Rect): boolean {
   const pad = Math.max(1, s.size * 0.25);
   return s.x >= box.x - pad && s.x <= box.x + box.width + pad && s.y >= box.y - pad && s.y <= box.y + box.height + pad;
+}
+
+/** Text operations that belong to the region. */
+function matchShows(shows: TextShow[], region: TextRegion): TextShow[] {
+  if (!region.lines?.length) return shows.filter((s) => inBox(s, region.box));
+  return shows.filter((s) =>
+    region.lines!.some(
+      (l) =>
+        Math.abs(s.y - l.y) <= Math.max(1, 0.3 * l.size) &&
+        Math.abs(s.size - l.size) <= 0.35 * l.size + 0.5 &&
+        s.x >= l.x0 - Math.max(1.5, 0.25 * l.size) &&
+        s.x <= l.x1 + 0.5,
+    ),
+  );
+}
+
+/** The run whose style covers most of the paragraph's characters. */
+function dominant(visible: TextShow[]): TextShow | undefined {
+  const weight = new Map<string, { n: number; s: TextShow }>();
+  for (const s of visible) {
+    const key = `${s.fontRes}|${s.size.toFixed(1)}|${s.color.r.toFixed(2)},${s.color.g.toFixed(2)},${s.color.b.toFixed(2)}`;
+    const w = weight.get(key) ?? { n: 0, s };
+    w.n += Math.max(1, s.chars);
+    weight.set(key, w);
+  }
+  return [...weight.values()].sort((a, b) => b.n - a.n)[0]?.s;
 }
 
 function styleOf(s: TextShow): TextStyle {
@@ -633,7 +710,7 @@ async function loadPage(bytes: Bytes, index: number) {
 /** The style of the first text in a region, to match the editor to it. */
 export async function inspectTextStyle(bytes: Bytes, region: TextRegion): Promise<TextStyle | null> {
   const { shows } = await loadPage(bytes, region.page);
-  const hit = shows.filter((s) => s.renderMode !== 3 && inBox(s, region.box)).sort((a, b) => b.y - a.y || a.x - b.x)[0];
+  const hit = dominant(matchShows(shows, region).filter((s) => s.renderMode !== 3));
   return hit ? styleOf(hit) : null;
 }
 
@@ -643,10 +720,25 @@ export interface ReplaceOptions extends TextRegion {
   /** Override the detected style (e.g. when nothing is detected). */
   style?: Partial<TextStyle>;
   /**
-   * The same typeface from the user's computer (TrueType/OpenType bytes), used
-   * when the PDF's own embedded copy lacks some of the characters typed.
+   * A typeface from the user's computer (TrueType/OpenType bytes): the
+   * document's own typeface when its embedded copy lacks some characters, or
+   * the font the user picked.
    */
   fontData?: Uint8Array | null;
+  /** Formatting the user chose explicitly; anything left out keeps the original. */
+  format?: TextFormat;
+  /** Add new text at the region's first line without removing or covering anything. */
+  insert?: boolean;
+}
+
+export interface TextFormat {
+  /** A font family name, or undefined to keep the document's font. */
+  family?: string;
+  size?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  color?: Color;
 }
 
 export interface ReplaceResult {
@@ -656,6 +748,8 @@ export interface ReplaceResult {
   removed: number;
   /** Which font the new text was written in. */
   font: { kind: 'original' | 'system' | 'standard'; name: string };
+  /** The new text needs more lines than the original had, so it may run into what's below. */
+  overflow: boolean;
 }
 
 const FONTS: Record<TextStyle['family'], [StandardFonts, StandardFonts, StandardFonts, StandardFonts]> = {
@@ -677,6 +771,11 @@ interface Writer {
  * it. Spaces missing from a subset are drawn as positioning gaps.
  */
 function originalWriter(first: TextShow, text: string, size: number, color: Color, sink: string[]): Writer | null {
+  // Keep the original letter/word spacing and horizontal scaling, converted to the new size.
+  const k = first.fontSize ? size / first.fontSize : 1;
+  const tc = first.tc * k;
+  const tw = first.font.codeLength === 1 ? first.tw * k : 0;
+  const th = first.th || 1;
   const f = first.font;
   if (!first.fontRes || !f.toCode) return null;
   const chars = [...text.replace(/\n/g, '')];
@@ -692,7 +791,7 @@ function originalWriter(first: TextShow, text: string, size: number, color: Colo
   const hex = (s: string) =>
     [...s].map((ch) => f.toCode!.get(ch)!.toString(16).padStart(f.codeLength * 2, '0')).join('');
   const width = (s: string) =>
-    ([...s].reduce((n, ch) => n + (ch === ' ' ? spaceWidth : f.width(f.toCode!.get(ch)!)), 0) / 1000) * size;
+    [...s].reduce((n, ch) => n + ((ch === ' ' ? spaceWidth : f.width(f.toCode!.get(ch)!)) / 1000) * size + tc + (ch === ' ' ? tw : 0), 0) * th;
   return {
     kind: 'original',
     name: f.baseFont || first.fontRes,
@@ -702,7 +801,7 @@ function originalWriter(first: TextShow, text: string, size: number, color: Colo
       const parts = spaceCode !== undefined ? [line] : line.split(' ');
       const tj = parts.map((w) => `<${hex(w)}>`).join(` ${fmt(-spaceWidth)} `);
       sink.push(
-        `BT /${first.fontRes} ${fmt(size)} Tf 0 Tc 0 Tw 100 Tz 0 Ts 0 Tr ${fmt(color.r)} ${fmt(color.g)} ${fmt(color.b)} rg ` +
+        `BT /${first.fontRes} ${fmt(size)} Tf ${fmt(tc)} Tc ${fmt(tw)} Tw ${fmt(th * 100)} Tz 0 Ts 0 Tr ${fmt(color.r)} ${fmt(color.g)} ${fmt(color.b)} rg ` +
           `1 0 0 1 ${fmt(x)} ${fmt(y)} Tm [${tj}] TJ ET`,
       );
     },
@@ -712,7 +811,7 @@ function originalWriter(first: TextShow, text: string, size: number, color: Colo
 /** Replace (or, with empty text, remove) the text inside a region of a page. */
 export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<ReplaceResult> {
   const { doc, page, content, ops, shows } = await loadPage(bytes, opts.page);
-  const hits = shows.filter((s) => inBox(s, opts.box));
+  const hits = opts.insert ? [] : matchShows(shows, opts);
   const visible = hits.filter((s) => s.renderMode !== 3);
   if (visible.some((s) => !s.horizontal)) {
     throw new EditError('Rotated or skewed text can’t be edited yet. Use White-out and Add text instead.');
@@ -752,10 +851,14 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
 
   // Nothing visible was removed (text in a form XObject, a scan with an OCR
   // layer, or an image): cover the area instead.
-  const method: ReplaceResult['method'] = visible.length ? 'edited' : 'covered';
+  const method: ReplaceResult['method'] = visible.length || opts.insert ? 'edited' : 'covered';
 
-  const first = [...visible].sort((a, b) => b.y - a.y || a.x - b.x)[0];
+  // The paragraph's own style is the one most of its characters use; it
+  // starts where its first line starts.
+  const first = dominant(visible);
+  const topLine = opts.lines?.length ? opts.lines.reduce((a, b) => (b.y > a.y ? b : a)) : null;
   const detected = first ? styleOf(first) : null;
+  const fmtIn = opts.format ?? {};
   const style: TextStyle = {
     fontSize: 11,
     color: { r: 0, g: 0, b: 0 },
@@ -765,13 +868,27 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
     ...(detected ?? {}),
     ...opts.style,
   };
+  if (fmtIn.size) style.fontSize = fmtIn.size;
+  if (fmtIn.color) style.color = fmtIn.color;
+  // A different typeface or weight/slant can't use the document's embedded font.
+  const faceChanged =
+    !!fmtIn.family || (fmtIn.bold !== undefined && fmtIn.bold !== style.bold) || (fmtIn.italic !== undefined && fmtIn.italic !== style.italic);
+  if (fmtIn.bold !== undefined) style.bold = fmtIn.bold;
+  if (fmtIn.italic !== undefined) style.italic = fmtIn.italic;
+  if (fmtIn.family) {
+    style.family = /courier|mono|consol|menlo/i.test(fmtIn.family)
+      ? 'mono'
+      : /times|serif|georgia|garamond|cambria|book|palatino|baskerville|didot|caslon|minion|charter/i.test(fmtIn.family) && !/sans/i.test(fmtIn.family)
+        ? 'serif'
+        : 'sans';
+  }
   const text = opts.text.replace(/\r\n?/g, '\n');
   const size = style.fontSize;
   const color = style.color;
 
   // 2. Choose the font: the PDF's own, the same typeface from this computer, or a standard one.
   const extra: string[] = [];
-  let writer: Writer | null = text.trim() && first && method === 'edited' ? originalWriter(first, text, size, color, extra) : null;
+  let writer: Writer | null = text.trim() && first && method === 'edited' && !faceChanged ? originalWriter(first, text, size, color, extra) : null;
   if (!writer && text.trim() && opts.fontData) {
     try {
       const fk = fontkit.create(opts.fontData as never) as unknown as { hasGlyphForCodePoint(cp: number): boolean };
@@ -800,6 +917,7 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
     };
   }
 
+  let lineCount = 0;
   // Wrap the original content so our additions start from a clean graphics state.
   if (hits.length || writer?.kind === 'original') {
     const enc = new TextEncoder();
@@ -818,10 +936,11 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
     const baselines = [...new Set(visible.map((s) => Math.round(s.y * 10) / 10))].sort((a, b) => b - a);
     const gaps = baselines.slice(1).map((y, i) => baselines[i] - y).filter((g) => g > size * 0.8 && g < size * 3);
     const lineHeight = gaps.length ? gaps.sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : size * 1.2;
-    const x = first ? Math.min(...visible.filter((s) => Math.abs(s.y - first.y) < size * 0.5).map((s) => s.x)) : opts.box.x;
-    let y = first ? first.y : opts.box.y + opts.box.height - size * 0.85;
+    const x = topLine ? topLine.x0 : first ? Math.min(...visible.filter((s) => Math.abs(s.y - first.y) < size * 0.5).map((s) => s.x)) : opts.box.x;
+    let y = topLine ? topLine.y : first ? Math.max(...visible.map((s) => s.y)) : opts.box.y + opts.box.height - size * 0.85;
     const maxWidth = Math.max(opts.box.width + size * 0.5, size * 4);
     const lines: string[] = [];
+    lineCount = 0;
     try {
       for (const para of text.split('\n')) {
         let line = '';
@@ -834,8 +953,16 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
         }
         lines.push(line);
       }
+      lineCount = lines.length;
       for (const line of lines) {
-        if (line) writer.draw(line, x, y);
+        if (line) {
+          writer.draw(line, x, y);
+          if (fmtIn.underline) {
+            const w = writer.width(line);
+            const t = Math.max(0.5, size * 0.06);
+            page.drawLine({ start: { x, y: y - size * 0.12 }, end: { x: x + w, y: y - size * 0.12 }, thickness: t, color: rgb(color.r, color.g, color.b) });
+          }
+        }
         y -= lineHeight;
       }
     } catch (err) {
@@ -857,5 +984,6 @@ export async function replaceText(bytes: Bytes, opts: ReplaceOptions): Promise<R
     method,
     removed: hits.length,
     font: { kind: writer?.kind ?? 'original', name: writer?.name ?? '' },
+    overflow: !opts.insert && !!opts.lines?.length && lineCount > opts.lines.length,
   };
 }

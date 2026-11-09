@@ -129,7 +129,7 @@ await step('edits existing text smoothly', async () => {
   const subtitle = win.locator('.page >> nth=0').locator('.textLayer span', { hasText: 'Housing Act 1988' }).first();
   await pageBox(0); // scroll back to the top of page 1
   await win.mouse.click(...(await at(subtitle)));
-  await win.click('.edit-bar button:has-text("Delete text")');
+  await win.click('.edit-bar button[title^="Delete this text"]');
   await idle();
   await win.waitForFunction(() => !(document.querySelector('.page .textLayer')?.textContent ?? '').includes('section 19A'));
 
@@ -140,6 +140,60 @@ await step('edits existing text smoothly', async () => {
     redrawn: window.__pages[0].querySelector('canvas.render') !== window.__canvases[0],
   }));
   assert.deepEqual(smooth, { samePages: true, removed: 0, untouched: true, redrawn: true }, 'edits update in place without rebuilding pages');
+  await win.click('[data-tool="select"]');
+});
+
+await step('keeps the original format, and applies formatting I choose', async () => {
+  const pdfText = async () => {
+    const bytes = new Uint8Array(await win.evaluate(() => Array.from(window.__debugDocBytes())));
+    const d = await getDocument({ data: bytes, verbosity: 0 }).promise;
+    const tc = await (await d.getPage(1)).getTextContent();
+    return { bytes, tc, items: tc.items.filter((i) => i.str.trim()) };
+  };
+  const at = async (loc) => {
+    const b = await loc.boundingBox();
+    return [b.x + Math.min(40, b.width / 2), b.y + b.height / 2];
+  };
+  await win.click('[data-tool="select"]');
+  await pageBox(0);
+
+  // Change one word in the paragraph right under the bold "1. Parties" heading.
+  const parties = win.locator('.page >> nth=0').locator('.textLayer span', { hasText: 'Harbour Properties' }).first();
+  await win.mouse.dblclick(...(await at(parties)));
+  await win.waitForSelector('.text-editor');
+  assert.equal(await win.inputValue('.fmt-size'), '11', 'editor shows the paragraph’s own size');
+  assert.equal(await win.getAttribute('.fmt-bold', 'aria-pressed'), 'false', 'editor shows it isn’t bold');
+  const value = await win.inputValue('.text-editor');
+  await win.fill('.text-editor', value.replace('Harbour Properties Ltd', 'Harbour Homes Ltd'));
+  await win.click('.edit-bar button:has-text("Done")');
+  await idle();
+  await win.waitForSelector('.text-editor', { state: 'detached' });
+  let { items, tc } = await pdfText();
+  const heading = items.find((i) => i.str === '1. Parties');
+  const para = items.find((i) => i.str.startsWith('This agreement is made between Harbour Homes'));
+  assert.ok(heading, 'heading above is untouched');
+  assert.ok(para, 'edited paragraph present');
+  assert.ok(Math.abs(para.transform[0] - 11) < 0.05, `same size as before (got ${para.transform[0]})`);
+  const original = items.find((i) => i.str.startsWith('The Landlord lets'));
+  assert.equal(tc.styles[para.fontName].fontFamily, tc.styles[original.fontName].fontFamily, 'same font as the rest of the text');
+
+  // Explicit formatting: Courier, 14pt, bold, underlined.
+  const landlord = win.locator('.page >> nth=0').locator('.textLayer span', { hasText: 'The Landlord lets' }).first();
+  await win.mouse.dblclick(...(await at(landlord)));
+  await win.waitForSelector('.text-editor');
+  await win.selectOption('.fmt-font', 'Courier');
+  await win.fill('.fmt-size', '14');
+  await win.click('.fmt-bold');
+  await win.click('.fmt-underline');
+  await win.click('.edit-bar button:has-text("Done")');
+  await idle();
+  await win.waitForSelector('.text-editor', { state: 'detached' });
+  ({ items, tc } = await pdfText());
+  // pdf.js reads monospaced text back as separate words, so join the 14pt runs.
+  const big = items.filter((i) => Math.abs(i.transform[0] - 14) < 0.05);
+  assert.match(big.map((i) => i.str).join(' '), /The Landlord lets the Tenant/, 'paragraph is now 14pt');
+  const styled = big[0];
+  assert.equal(tc.styles[styled.fontName].fontFamily, 'monospace', 'Courier');
   await win.click('[data-tool="select"]');
 });
 

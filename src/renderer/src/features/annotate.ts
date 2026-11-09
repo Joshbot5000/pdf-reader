@@ -5,12 +5,14 @@
  * (see shared/annotations.ts), so the Eraser can remove them without ever
  * touching the document's own content.
  */
-import { addRect, addText, type Color, type Point } from '../../../shared/pdfOps';
+import { addRect, type Color, type Point } from '../../../shared/pdfOps';
+import { replaceText } from '../../../shared/textEdit';
 import { addHighlightAnnotation, addInkAnnotation, distanceTo, listOwnAnnotations, removeOwnAnnotations, type OwnAnnotation } from '../../../shared/annotations';
-import { applyEdit, doc } from '../core/doc';
+import { api, applyEdit, doc } from '../core/doc';
 import { drag, setInteraction, toPdf, toViewport, view, type Interaction, type PageView } from '../core/viewer';
 import { cursors } from '../ui/cursors';
 import { button, h } from '../ui/dom';
+import { createFormatBar, cssFamily, type FormatState } from '../ui/formatbar';
 import { toast } from '../ui/overlays';
 import { closeTextEditor, createEditTextTool } from './textedit';
 
@@ -211,7 +213,13 @@ const interactions: Record<Tool, Interaction | null> = {
   whiteout: rectTool('whiteout'),
 };
 
-/** A floating textarea; Enter places the text, Shift+Enter adds a line, Esc cancels. */
+/** Formatting for new text, remembered between uses (like Word's current style). */
+let newTextFormat: FormatState | null = null;
+
+/**
+ * A floating text box for new text with a formatting bar (font, size, B/I/U,
+ * colour). Enter places the text, Shift+Enter adds a line, Esc cancels.
+ */
 export function startTextDraft(
   pv: PageView,
   x: number,
@@ -219,47 +227,98 @@ export function startTextDraft(
   opts: { initial?: string; size?: number; color?: string } = {},
 ) {
   document.querySelector('.text-draft')?.dispatchEvent(new Event('commit'));
-  const size = opts.size ?? pen.size;
-  const color = opts.color ?? pen.color;
-  const fontPx = size * view.scale;
+  const initial: FormatState = newTextFormat
+    ? { ...newTextFormat, size: opts.size ?? newTextFormat.size, color: opts.color ?? newTextFormat.color }
+    : { family: 'Helvetica', size: opts.size ?? pen.size, bold: false, italic: false, underline: false, color: opts.color ?? pen.color };
+  let fmt = { ...initial };
   const ta = h('textarea', {
     class: 'text-draft',
     rows: 1,
-    spellcheck: false,
+    spellcheck: true,
     value: opts.initial ?? '',
     attrs: { 'aria-label': 'New text' },
-    style: { left: `${x - 1}px`, top: `${y - 1}px`, fontSize: `${fontPx}px`, color },
+    style: { left: `${x - 1}px`, top: `${y - 1}px` },
   });
-  const resize = () => {
+  const apply = () => {
+    const px = fmt.size * view.scale;
+    Object.assign(ta.style, {
+      fontFamily: cssFamily(fmt.family, 'Helvetica, Arial, sans-serif'),
+      fontSize: `${px}px`,
+      fontWeight: fmt.bold ? '700' : '400',
+      fontStyle: fmt.italic ? 'italic' : 'normal',
+      textDecoration: fmt.underline ? 'underline' : 'none',
+      color: fmt.color,
+    });
     ta.style.height = 'auto';
     ta.style.height = `${ta.scrollHeight + 2}px`;
     ta.style.width = 'auto';
-    ta.style.width = `${Math.max(ta.scrollWidth + 4, fontPx * 4)}px`;
+    ta.style.width = `${Math.max(ta.scrollWidth + 4, px * 4)}px`;
   };
+  const formatBar = createFormatBar(initial, null, (f) => {
+    fmt = f;
+    newTextFormat = { ...f };
+    apply();
+    if (!(document.activeElement instanceof HTMLInputElement)) ta.focus();
+  });
+  const bar = h('div', { class: 'edit-bar draft-bar', style: { left: `${x - 1}px`, top: `${Math.max(4, y - 50)}px` } }, formatBar.el);
+
   let done = false;
   const finish = (commit: boolean) => {
     if (done) return;
     done = true;
-    const lines = ta.value.split('\n');
+    const text = ta.value.replace(/\s+$/, '');
     ta.remove();
-    if (!commit || !ta.value.trim()) return;
-    const lineHeight = fontPx * 1.2;
-    const edits = lines.map((text, i) => ({ text, at: toPdf(pv, x, y + i * lineHeight + fontPx * 0.9) }));
-    void applyEdit((b) => addText(b, { page: pv.index, lines: edits, size, color: hexToColor(color) }), { pages: [pv.index] });
+    bar.remove();
+    if (!commit || !text.trim()) return;
+    const f = fmt;
+    const baseline = toPdf(pv, x, y + f.size * view.scale * 0.9);
+    const standard = /^(helvetica|times new roman|courier)$/i.test(f.family);
+    const style = { fontSize: f.size, color: hexToColor(f.color), family: 'sans' as const, bold: f.bold, italic: f.italic };
+    void applyEdit(
+      async (b) => {
+        const fontData = standard ? null : await api.findFont(f.family, { bold: f.bold, italic: f.italic }).catch(() => null);
+        const res = await replaceText(b, {
+          page: pv.index,
+          insert: true,
+          box: { x: baseline.x, y: baseline.y - f.size, width: 100000, height: f.size },
+          lines: [{ y: baseline.y, x0: baseline.x, x1: baseline.x, size: f.size }],
+          text,
+          style,
+          fontData,
+          format: { family: f.family, size: f.size, bold: f.bold, italic: f.italic, underline: f.underline, color: hexToColor(f.color) },
+        });
+        return res.bytes;
+      },
+      { pages: [pv.index] },
+    );
   };
-  ta.addEventListener('input', resize);
+  ta.addEventListener('input', apply);
   ta.addEventListener('keydown', (e) => {
     e.stopPropagation();
+    if (formatBar.shortcut(e)) return;
     if (e.key === 'Escape') finish(false);
     else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       finish(true);
     }
   });
-  ta.addEventListener('blur', () => finish(true));
+  ta.addEventListener('blur', (e) => {
+    if (bar.contains(e.relatedTarget as Node)) return;
+    finish(true);
+  });
+  bar.addEventListener('pointerdown', (e) => {
+    if ((e.target as HTMLElement).closest('button')) e.preventDefault();
+  });
+  bar.addEventListener('focusout', (e) => {
+    const to = e.relatedTarget as Node | null;
+    if (to && (to === ta || bar.contains(to))) return;
+    setTimeout(() => {
+      if (!bar.contains(document.activeElement) && document.activeElement !== ta) finish(true);
+    });
+  });
   ta.addEventListener('commit', () => finish(true));
-  pv.overlay.append(ta);
-  resize();
+  pv.overlay.append(bar, ta);
+  apply();
   // Focus now so the first keystrokes aren't lost (the pointerdown that
   // created the draft had its default prevented, so focus stays here).
   ta.focus();

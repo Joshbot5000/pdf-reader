@@ -134,6 +134,23 @@ export async function openSettings() {
         .catch(() => {});
     }
 
+    const testResult = h('div', { class: 'test-result', attrs: { 'aria-live': 'polite' } });
+    const testBtn =
+      provider === 'gemini' && hasKey
+        ? button({
+            label: 'Test connection',
+            icon: 'check',
+            kind: 'soft',
+            onClick: async () => {
+              testResult.className = 'test-result';
+              testResult.textContent = 'Testing…';
+              const r = await api.aiTestGemini();
+              testResult.className = `test-result ${r.ok ? 'ok' : 'bad'}`;
+              testResult.textContent = r.message;
+            },
+          })
+        : null;
+
     aiBody.replaceChildren(
       providerRow,
       h('p', { class: 'muted' }, p.blurb),
@@ -155,6 +172,8 @@ export async function openSettings() {
           : null,
       ),
       modelRow,
+      testBtn ? h('div', { class: 'row' }, testBtn) : '',
+      testResult,
       h(
         'p',
         { class: 'fine' },

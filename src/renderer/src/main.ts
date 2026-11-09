@@ -550,6 +550,9 @@ const menuActions: Record<MenuAction, () => unknown> = {
 api.onMenu((action) => void menuActions[action]?.());
 api.onOpenRequest((path) => void openPath(path));
 
+// Read-only hook for end-to-end tests: the current document's bytes.
+(window as unknown as { __debugDocBytes: () => Uint8Array | null }).__debugDocBytes = () => doc.bytes;
+
 void (async () => {
   await Promise.all([loadSignatures(), loadTemplates(), loadBrand(), refreshAssistant()]);
   await setMode('home');

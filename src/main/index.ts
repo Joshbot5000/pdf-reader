@@ -7,7 +7,7 @@ import * as ai from './ai';
 import * as gemini from './gemini';
 import { recognize, shutdownOcr } from './ocr';
 import { buildDeck } from './slides';
-import { findFont, warmFontIndex } from './fonts';
+import { findFont, listFamilies, warmFontIndex } from './fonts';
 import * as spaces from './spaces';
 import { addRecent, loadApiKey, loadState, saveApiKey, updateState } from './store';
 
@@ -260,6 +260,7 @@ function registerIpc() {
     closing.add(e.sender.id);
     win.close();
   });
+  ipcMain.handle('fonts:list', () => listFamilies());
   ipcMain.handle('fonts:find', (_e, name: unknown, hint: unknown) =>
     typeof name === 'string' ? findFont(name, (hint ?? {}) as { bold?: boolean; italic?: boolean }) : null,
   );
@@ -300,6 +301,7 @@ function registerIpc() {
     ai.resetClient();
   });
   ipcMain.handle('ai:geminiModels', () => gemini.listModels());
+  ipcMain.handle('ai:testGemini', () => gemini.testConnection());
   ipcMain.handle('ai:chat', async (e, req: AiChatRequest) => ((await provider()) === 'claude' ? ai.chat(e.sender, req) : gemini.chat(e.sender, req)));
   ipcMain.on('ai:cancel', (_e, id: unknown) => {
     if (typeof id !== 'string') return;
