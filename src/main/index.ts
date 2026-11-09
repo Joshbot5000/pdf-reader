@@ -1,12 +1,21 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, shell } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { MenuAction, OpenedFile } from '../shared/ipc';
+import type { AiChatRequest, AppState, MenuAction, OpenedFile, SlideOutline } from '../shared/ipc';
+import * as ai from './ai';
+import { recognize, shutdownOcr } from './ocr';
+import { buildDeck } from './slides';
+import * as spaces from './spaces';
+import { addRecent, loadApiKey, loadState, saveApiKey, updateState } from './store';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const rendererDir = resolve(here, '../renderer');
 const preloadPath = join(here, '../preload/index.cjs');
+const isMac = process.platform === 'darwin';
+
+// Tests and screenshots run against an isolated profile.
+if (process.env.PDF_READER_USER_DATA) app.setPath('userData', process.env.PDF_READER_USER_DATA);
 
 // Serve the UI from app:// rather than file:// so fetch() works for pdf.js
 // fonts, CMaps and wasm, and so the page gets a proper secure origin.
@@ -28,18 +37,26 @@ async function readPdf(path: string): Promise<OpenedFile> {
   if (extname(path).toLowerCase() !== '.pdf') throw new Error('Only .pdf files can be opened.');
   const data = await readFile(path);
   writablePaths.add(path);
+  void addRecent(path, basename(path));
   return { path, name: basename(path), data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
 }
 
+const titleBarColors = () =>
+  nativeTheme.shouldUseDarkColors
+    ? { color: '#0c0d12', symbolColor: '#c9cbe0', height: 44 }
+    : { color: '#f6f6fb', symbolColor: '#3a3d52', height: 44 };
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 760,
-    minHeight: 480,
+    width: 1440,
+    height: 920,
+    minWidth: 900,
+    minHeight: 560,
     title: 'PDF Reader',
-    backgroundColor: '#1f2125',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0c0d12' : '#f6f6fb',
     show: false,
+    titleBarStyle: 'hidden',
+    ...(isMac ? { trafficLightPosition: { x: 16, y: 14 } } : { titleBarOverlay: titleBarColors() }),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -48,8 +65,8 @@ function createWindow(): BrowserWindow {
       spellcheck: false,
     },
   });
-
   const id = win.webContents.id; // webContents is destroyed by the time 'closed' fires
+
   win.once('ready-to-show', () => win.show());
   // Never navigate away from the app or open other windows; send links to the browser.
   win.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -82,7 +99,6 @@ function send(action: MenuAction) {
 }
 
 function buildMenu() {
-  const isMac = process.platform === 'darwin';
   const item = (label: string, action: MenuAction, accelerator?: string) => ({
     label,
     accelerator,
@@ -94,21 +110,37 @@ function buildMenu() {
       {
         label: 'File',
         submenu: [
+          item('Home', 'home', 'CmdOrCtrl+Shift+H'),
           item('Open…', 'open', 'CmdOrCtrl+O'),
           item('Save', 'save', 'CmdOrCtrl+S'),
           item('Save As…', 'saveAs', 'CmdOrCtrl+Shift+S'),
           { type: 'separator' },
           item('Insert Pages from PDF…', 'insertPdf'),
           { type: 'separator' },
+          item('Settings…', 'settings', 'CmdOrCtrl+,'),
+          { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],
       },
-      // Standard roles keep copy/paste working in text fields; document
-      // undo/redo is handled in the renderer so it does not fight them.
-      { role: 'editMenu' },
+      // Undo/redo go to the renderer, which undoes text in a focused field
+      // or the last document edit otherwise. Clipboard roles stay native.
+      {
+        label: 'Edit',
+        submenu: [
+          item('Undo', 'undo', 'CmdOrCtrl+Z'),
+          item('Redo', 'redo', 'CmdOrCtrl+Shift+Z'),
+          { ...item('Redo', 'redo', 'Ctrl+Y'), visible: false, acceleratorWorksWhenHidden: true },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' },
+        ],
+      },
       {
         label: 'View',
         submenu: [
+          item('Command Palette…', 'palette', 'CmdOrCtrl+K'),
           item('Find…', 'find', 'CmdOrCtrl+F'),
           { type: 'separator' },
           item('Zoom In', 'zoomIn', 'CmdOrCtrl+='),
@@ -124,6 +156,13 @@ function buildMenu() {
   );
 }
 
+function bytes(value: unknown, what = 'data'): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw new Error(`Invalid ${what}`);
+  return value;
+}
+
+const STATE_KEYS: (keyof AppState)[] = ['recent', 'signatures', 'templates', 'brand', 'spaces', 'settings'];
+
 function registerIpc() {
   ipcMain.handle('dialog:open', async (e): Promise<OpenedFile | null> => {
     const win = BrowserWindow.fromWebContents(e.sender)!;
@@ -134,6 +173,21 @@ function registerIpc() {
     return r.canceled || !r.filePaths[0] ? null : readPdf(r.filePaths[0]);
   });
 
+  ipcMain.handle('dialog:pick', async (e, filters: unknown, multi: unknown) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const r = await dialog.showOpenDialog(win, {
+      properties: multi ? ['openFile', 'multiSelections'] : ['openFile'],
+      filters: Array.isArray(filters) ? filters : [],
+    });
+    if (r.canceled) return [];
+    return Promise.all(
+      r.filePaths.map(async (path) => {
+        const data = await readFile(path);
+        return { path, name: basename(path), data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) };
+      }),
+    );
+  });
+
   ipcMain.handle('file:openPath', (_e, path: unknown) => {
     if (typeof path !== 'string' || !path) throw new Error('Invalid path');
     return readPdf(resolve(path));
@@ -141,12 +195,11 @@ function registerIpc() {
 
   ipcMain.handle('file:save', async (_e, path: unknown, data: unknown) => {
     if (typeof path !== 'string' || !writablePaths.has(path)) throw new Error('That file was not opened in this app.');
-    if (!(data instanceof Uint8Array)) throw new Error('Invalid data');
-    await writeFile(path, data);
+    await writeFile(path, bytes(data));
   });
 
   ipcMain.handle('dialog:saveAs', async (e, suggestedName: unknown, data: unknown): Promise<OpenedFile | null> => {
-    if (!(data instanceof Uint8Array)) throw new Error('Invalid data');
+    const payload = bytes(data);
     const win = BrowserWindow.fromWebContents(e.sender)!;
     const r = await dialog.showSaveDialog(win, {
       defaultPath: typeof suggestedName === 'string' ? suggestedName : 'document.pdf',
@@ -154,9 +207,23 @@ function registerIpc() {
     });
     if (r.canceled || !r.filePath) return null;
     const path = extname(r.filePath) ? r.filePath : `${r.filePath}.pdf`;
-    await writeFile(path, data);
+    await writeFile(path, payload);
     writablePaths.add(path);
-    return { path, name: basename(path), data };
+    void addRecent(path, basename(path));
+    return { path, name: basename(path), data: payload };
+  });
+
+  ipcMain.handle('dialog:export', async (e, name: unknown, data: unknown, ext: unknown, label: unknown) => {
+    const payload = bytes(data);
+    const extension = typeof ext === 'string' && /^[a-z0-9]{1,8}$/i.test(ext) ? ext : 'bin';
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const r = await dialog.showSaveDialog(win, {
+      defaultPath: typeof name === 'string' ? name : `export.${extension}`,
+      filters: [{ name: typeof label === 'string' ? label : extension.toUpperCase(), extensions: [extension] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    await writeFile(r.filePath, payload);
+    return r.filePath;
   });
 
   ipcMain.on('doc:dirty', (e, dirty: unknown) => {
@@ -169,6 +236,76 @@ function registerIpc() {
     pendingOpen = null;
     return p;
   });
+
+  // ---- persisted state
+  ipcMain.handle('state:get', () => loadState());
+  ipcMain.handle('state:set', (_e, key: unknown, value: unknown) => {
+    if (!STATE_KEYS.includes(key as keyof AppState)) throw new Error('Unknown setting');
+    return updateState((s) => {
+      (s as unknown as Record<string, unknown>)[key as string] = value;
+      if (key === 'settings') {
+        const theme = (value as AppState['settings']).theme;
+        nativeTheme.themeSource = theme;
+      }
+    });
+  });
+
+  // ---- OCR
+  ipcMain.handle('ocr:recognize', (_e, png: unknown) => recognize(bytes(png, 'image')));
+
+  // ---- AI
+  ipcMain.handle('ai:status', async () => ({ hasKey: !!(await loadApiKey()) }));
+  ipcMain.handle('ai:setKey', async (_e, key: unknown) => {
+    await saveApiKey(typeof key === 'string' && key.trim() ? key : null);
+    ai.resetClient();
+  });
+  ipcMain.handle('ai:chat', (e, req: AiChatRequest) => ai.chat(e.sender, req));
+  ipcMain.on('ai:cancel', (_e, id: unknown) => typeof id === 'string' && ai.cancel(id));
+  ipcMain.on('ai:forget', (_e, id: unknown) => typeof id === 'string' && ai.forget(id));
+  ipcMain.handle('ai:slides', (_e, req) => ai.slides(req));
+  ipcMain.handle('slides:save', async (e, outline: SlideOutline) => {
+    const data = await buildDeck(outline);
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const r = await dialog.showSaveDialog(win, {
+      defaultPath: `${outline.title.replace(/[\\/:*?"<>|]+/g, ' ').trim() || 'Presentation'}.pptx`,
+      filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    await writeFile(r.filePath, data);
+    return r.filePath;
+  });
+
+  // ---- Spaces
+  ipcMain.handle('space:addFiles', async (e, spaceId: string) => {
+    const win = BrowserWindow.fromWebContents(e.sender)!;
+    const r = await dialog.showOpenDialog(win, {
+      properties: ['openFile', 'multiSelections'],
+      filters: spaces.SPACE_FILE_FILTERS,
+    });
+    if (r.canceled) return loadState();
+    const added = [];
+    const errors: string[] = [];
+    for (const p of r.filePaths) {
+      try {
+        added.push(await spaces.addFile(spaceId, p));
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    const state = await spaces.appendSources(spaceId, added);
+    if (errors.length) throw new Error(errors.join('\n'));
+    return state;
+  });
+  ipcMain.handle('space:addUrl', async (_e, spaceId: string, url: string) =>
+    spaces.appendSources(spaceId, [await spaces.addUrl(spaceId, url)]),
+  );
+  ipcMain.handle('space:addPath', async (_e, spaceId: string, path: unknown) => {
+    // Only documents the user has opened in this session can be added this way.
+    if (typeof path !== 'string' || !writablePaths.has(path)) throw new Error('Save the document first, then add it.');
+    return spaces.appendSources(spaceId, [await spaces.addFile(spaceId, path)]);
+  });
+  ipcMain.handle('space:removeSource', (_e, spaceId: string, sourceId: string) => spaces.removeSource(spaceId, sourceId));
+  ipcMain.handle('space:delete', (_e, spaceId: string) => spaces.deleteSpace(spaceId));
 }
 
 function openInWindow(path: string) {
@@ -199,7 +336,12 @@ if (!app.requestSingleInstanceLock()) {
     else pendingOpen = path;
   });
 
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
+    nativeTheme.themeSource = (await loadState()).settings.theme;
+    nativeTheme.on('updated', () => {
+      if (isMac) return;
+      for (const w of BrowserWindow.getAllWindows()) w.setTitleBarOverlay(titleBarColors());
+    });
     protocol.handle('app', (req) => {
       const { pathname } = new URL(req.url);
       const target = normalize(join(rendererDir, decodeURIComponent(pathname)));
@@ -214,9 +356,14 @@ if (!app.requestSingleInstanceLock()) {
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
     });
+  }).catch((err: unknown) => {
+    console.error('Startup failed:', err);
+    dialog.showErrorBox('PDF Reader could not start', err instanceof Error ? err.stack ?? err.message : String(err));
+    app.exit(1);
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
+    if (!isMac) app.quit();
   });
+  app.on('will-quit', () => void shutdownOcr());
 }

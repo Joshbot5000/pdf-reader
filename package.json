@@ -1,7 +1,7 @@
 {
   "name": "pdf-reader",
-  "version": "0.1.0",
-  "description": "Desktop app to open, search, annotate and edit PDFs",
+  "version": "0.2.0",
+  "description": "Desktop PDF editor: search, annotate, sign, fill and build forms, redact, OCR, compare, brand, and chat with documents using Claude",
   "main": "out/main/index.js",
   "private": true,
   "license": "MIT",
@@ -12,8 +12,9 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "npm run build && node tests/e2e.mjs",
-    "dist": "npm run build && electron-builder"
+    "test:e2e": "npm run build && node tests/e2e.mjs && node tests/e2e-ai.mjs",
+    "dist": "npm run build && electron-builder",
+    "screenshots": "npm run build && node tests/tour.mjs screenshots dark && node tests/tour.mjs screenshots light"
   },
   "build": {
     "appId": "com.joshbot5000.pdfreader",
@@ -40,11 +41,28 @@
       "target": [
         "nsis"
       ]
-    }
+    },
+    "asarUnpack": [
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**",
+      "node_modules/@tesseract.js-data/**"
+    ]
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource/caveat": "^5.3.0",
+    "@fontsource/dancing-script": "^5.3.0",
+    "@fontsource/great-vibes": "^5.3.0",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "diff": "^9.0.0",
+    "lucide-static": "^1.70.0",
+    "mammoth": "^1.13.0",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^6.5.438"
+    "pdfjs-dist": "^6.5.438",
+    "pptxgenjs": "^4.0.1",
+    "tesseract.js": "^7.0.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
@@ -55,5 +73,8 @@
     "typescript": "^5.9.3",
     "vite": "^8.3.6",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "wasm-feature-detect": "1.8.0"
   }
 }

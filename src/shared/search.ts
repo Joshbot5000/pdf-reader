@@ -78,7 +78,7 @@ function normalizeQuery(query: string, caseSensitive: boolean): string {
   return Array.from(collapsed, (c) => fold(c, caseSensitive)).join('');
 }
 
-function toSegments(map: Indexed['map'], from: number, to: number): MatchSegment[] {
+export function toSegments(map: Indexed['map'], from: number, to: number): MatchSegment[] {
   const segs: MatchSegment[] = [];
   for (let k = from; k < to; k++) {
     const ref = map[k];
@@ -112,3 +112,26 @@ export function findInPage(page: number, items: TextRun[], query: string, opts: 
 export function findAll(pages: TextRun[][], query: string, opts: SearchOptions = {}): Match[] {
   return pages.flatMap((items, page) => findInPage(page, items, query, opts));
 }
+
+/** Find regular-expression matches in a page (case handling is up to the pattern's flags). */
+export function findRegexInPage(page: number, items: TextRun[], pattern: RegExp): Match[] {
+  const { text, map } = indexPage(items, true);
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const out: Match[] = [];
+  for (const m of text.matchAll(new RegExp(pattern.source, flags))) {
+    if (!m[0]) continue;
+    out.push({ page, segments: toSegments(map, m.index!, m.index! + m[0].length) });
+  }
+  return out;
+}
+
+/** Common kinds of personal data, for one-click redaction. */
+export const SENSITIVE_PATTERNS: { id: string; label: string; one: string; pattern: RegExp }[] = [
+  { id: 'email', one: 'Email address', label: 'Email addresses', pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/ },
+  { id: 'phone', one: 'Phone number', label: 'Phone numbers', pattern: /(?:\+\d{1,3}[ .-]?)?(?:\(\d{2,5}\)[ .-]?)?\d{2,5}[ .-]\d{3,4}[ .-]?\d{3,4}\b/ },
+  { id: 'card', one: 'Card number', label: 'Card numbers', pattern: /\b(?:\d{4}[ -]?){3}\d{4}\b/ },
+  { id: 'nino', one: 'National Insurance number', label: 'UK National Insurance numbers', pattern: /\b[A-CEGHJ-PR-TW-Z]{2} ?\d{2} ?\d{2} ?\d{2} ?[A-D]\b/ },
+  { id: 'postcode', one: 'Postcode', label: 'UK postcodes', pattern: /\b[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}\b/ },
+  { id: 'iban', one: 'IBAN', label: 'IBANs', pattern: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}(?: ?[A-Z0-9]{1,3})?\b/ },
+  { id: 'ssn', one: 'Social Security number', label: 'US Social Security numbers', pattern: /\b\d{3}-\d{2}-\d{4}\b/ },
+];
