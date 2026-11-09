@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'"
+    />
+    <title>PDF Reader</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <header id="toolbar" role="toolbar" aria-label="Document tools">
+      <div class="group">
+        <button id="btn-open" title="Open (Ctrl+O)">Open</button>
+        <button id="btn-save" title="Save (Ctrl+S)" data-needs-edit>Save</button>
+        <button id="btn-save-as" title="Save As (Ctrl+Shift+S)" data-needs-doc>Save As</button>
+      </div>
+      <div class="group">
+        <button id="btn-undo" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+        <button id="btn-redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+      </div>
+      <div class="group" id="tools" role="radiogroup" aria-label="Tool">
+        <button data-tool="select" title="Select text (V)" class="active">Select</button>
+        <button data-tool="text" title="Add text (T)" data-needs-edit>Text</button>
+        <button data-tool="highlight" title="Highlight area (H)" data-needs-edit>Highlight</button>
+        <button data-tool="whiteout" title="White-out area (W)" data-needs-edit>White-out</button>
+        <button data-tool="ink" title="Draw (D)" data-needs-edit>Draw</button>
+        <input id="color" type="color" value="#d0021b" title="Text and pen colour" />
+        <select id="size" title="Text size / pen width">
+          <option value="8">8</option>
+          <option value="10">10</option>
+          <option value="12" selected>12</option>
+          <option value="14">14</option>
+          <option value="18">18</option>
+          <option value="24">24</option>
+          <option value="36">36</option>
+        </select>
+      </div>
+      <div class="group" aria-label="Page">
+        <button id="btn-rot-l" title="Rotate page left" aria-label="Rotate page left" data-needs-edit>⟲</button>
+        <button id="btn-rot-r" title="Rotate page right" aria-label="Rotate page right" data-needs-edit>⟳</button>
+        <button id="btn-up" title="Move page up" aria-label="Move page up" data-needs-edit>▲</button>
+        <button id="btn-down" title="Move page down" aria-label="Move page down" data-needs-edit>▼</button>
+        <button id="btn-blank" title="Insert blank page after current" data-needs-edit>+ Page</button>
+        <button id="btn-insert" title="Insert pages from another PDF after current" data-needs-edit>+ PDF</button>
+        <button id="btn-delete" title="Delete current page" data-needs-edit>Delete</button>
+      </div>
+      <div class="group" aria-label="Zoom">
+        <button id="btn-zoom-out" title="Zoom out (Ctrl+-)" aria-label="Zoom out" data-needs-doc>−</button>
+        <button id="btn-fit" title="Fit width (Ctrl+0)" data-needs-doc><span id="zoom-label">Fit</span></button>
+        <button id="btn-zoom-in" title="Zoom in (Ctrl+=)" aria-label="Zoom in" data-needs-doc>+</button>
+      </div>
+      <div class="group search" role="search">
+        <input id="search" type="search" placeholder="Find in document" aria-label="Find in document" data-needs-doc />
+        <button id="btn-case" title="Match case" aria-pressed="false" data-needs-doc>Aa</button>
+        <button id="btn-word" title="Whole words" aria-pressed="false" data-needs-doc>W</button>
+        <button id="btn-prev" title="Previous match (Shift+Enter)" aria-label="Previous match" data-needs-doc>‹</button>
+        <button id="btn-next" title="Next match (Enter)" aria-label="Next match" data-needs-doc>›</button>
+        <span id="search-count" aria-live="polite"></span>
+      </div>
+      <div class="group">
+        <button id="btn-forms" title="Fill form fields" aria-pressed="false" data-needs-doc>Forms</button>
+      </div>
+    </header>
+
+    <main>
+      <aside id="thumbs" aria-label="Pages"></aside>
+      <section id="viewer" tabindex="-1">
+        <div id="pages"></div>
+        <div id="empty">
+          <p>Open a PDF, or drop one here.</p>
+          <button id="btn-open-empty">Open PDF…</button>
+        </div>
+      </section>
+      <aside id="forms" hidden aria-label="Form fields">
+        <h2>Form fields</h2>
+        <div id="forms-body"></div>
+      </aside>
+    </main>
+
+    <footer id="status">
+      <span id="status-file">No document</span>
+      <span id="status-page"></span>
+      <span id="status-msg" aria-live="polite"></span>
+    </footer>
+    <div id="toast" role="alert" hidden></div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

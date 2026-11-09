@@ -1,0 +1,59 @@
+{
+  "name": "pdf-reader",
+  "version": "0.1.0",
+  "description": "Desktop app to open, search, annotate and edit PDFs",
+  "main": "out/main/index.js",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "npm run build && node tests/e2e.mjs",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.joshbot5000.pdfreader",
+    "productName": "PDF Reader",
+    "files": [
+      "out/**"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDF Document",
+        "role": "Editor"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  },
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.5.438"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "playwright-core": "^1.63.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  }
+}
