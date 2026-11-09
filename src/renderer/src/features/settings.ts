@@ -4,11 +4,45 @@ import { button, h, icon } from '../ui/dom';
 import { openModal, toast } from '../ui/overlays';
 import { refreshAssistant } from './assistant';
 
+type Provider = 'gemini' | 'claude';
+
+const PROVIDERS: Record<Provider, { name: string; badge: string; keyUrl: string; keyLabel: string; placeholder: string; blurb: string; prefix: RegExp }> = {
+  gemini: {
+    name: 'Google Gemini',
+    badge: 'Free',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    keyLabel: 'Get a free key from Google AI Studio ↗',
+    placeholder: 'AIza…',
+    blurb:
+      'Free with a Google account: no card needed. Reads your PDFs directly (text, tables and scans) and handles long documents. The free tier has daily limits; if one model’s limit is reached the app switches to another automatically.',
+    prefix: /^AIza/,
+  },
+  claude: {
+    name: 'Anthropic Claude',
+    badge: 'Paid',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    keyLabel: 'Get an API key ↗',
+    placeholder: 'sk-ant-…',
+    blurb: 'Pay-as-you-go. Answers include exact quoted citations from the document.',
+    prefix: /^sk-ant-/,
+  },
+};
+
+const clean = (err: unknown) => (err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err));
+
 export async function openSettings() {
   const state = await api.getState();
-  let { hasKey } = await api.aiStatus();
-  let theme = state.settings.theme;
+  let settings: AppState['settings'] = { ...state.settings };
+  let status = await api.aiStatus();
+  let provider: Provider = settings.aiProvider ?? 'gemini';
 
+  const persist = async () => {
+    settings = (await api.setState('settings', settings)).settings;
+    status = await api.aiStatus();
+    void refreshAssistant();
+  };
+
+  // ---- appearance
   const themes: { id: AppState['settings']['theme']; label: string; icon: 'sun' | 'moon' | 'settings' }[] = [
     { id: 'system', label: 'System', icon: 'settings' },
     { id: 'light', label: 'Light', icon: 'sun' },
@@ -22,11 +56,11 @@ export async function openSettings() {
           'button',
           {
             type: 'button',
-            class: theme === t.id ? 'active' : '',
+            class: settings.theme === t.id ? 'active' : '',
             on: {
               click: async () => {
-                theme = t.id;
-                await api.setState('settings', { ...state.settings, theme });
+                settings.theme = t.id;
+                await persist();
                 renderThemes();
               },
             },
@@ -38,30 +72,99 @@ export async function openSettings() {
     );
   renderThemes();
 
-  const keyInput = h('input', { class: 'input mono', type: 'password', placeholder: hasKey ? '••••••••••••••••  (saved)' : 'sk-ant-…', autocomplete: 'off' });
-  const status = h('span', { class: `pill ${hasKey ? 'ok' : ''}` });
-  const renderStatus = () => {
-    status.className = `pill ${hasKey ? 'ok' : ''}`;
-    status.textContent = hasKey ? 'Connected' : 'Not set';
-  };
-  renderStatus();
-  const saveKey = async () => {
-    const v = keyInput.value.trim();
-    if (!v) return;
-    if (!/^sk-ant-/.test(v)) toast('That does not look like an Anthropic API key (they start with “sk-ant-”). Saved anyway.', 'info');
-    try {
-      await api.aiSetKey(v);
-      hasKey = true;
-      keyInput.value = '';
-      keyInput.placeholder = '••••••••••••••••  (saved)';
-      renderStatus();
-      toast('API key saved securely', 'success');
-      void refreshAssistant();
-    } catch (err) {
-      toast(err instanceof Error ? err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(err));
+  // ---- AI
+  const aiBody = h('div');
+  const renderAi = () => {
+    const p = PROVIDERS[provider];
+    const hasKey = status.keys[provider];
+    const providerRow = h(
+      'div',
+      { class: 'provider-cards' },
+      ...(Object.keys(PROVIDERS) as Provider[]).map((id) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            class: `provider-card${provider === id ? ' active' : ''}`,
+            on: {
+              click: async () => {
+                provider = id;
+                settings.aiProvider = id;
+                await persist();
+                renderAi();
+              },
+            },
+          },
+          h('span', { class: 'provider-name' }, PROVIDERS[id].name, h('span', { class: `pill ${id === 'gemini' ? 'ok' : ''}` }, PROVIDERS[id].badge)),
+          h('small', {}, status.keys[id] ? 'Key saved' : 'No key yet'),
+        ),
+      ),
+    );
+    const keyInput = h('input', { class: 'input mono', type: 'password', placeholder: hasKey ? '••••••••••••••••  (saved)' : p.placeholder, autocomplete: 'off' });
+    const saveKey = async () => {
+      const v = keyInput.value.trim();
+      if (!v) return;
+      if (!p.prefix.test(v)) toast(`That doesn’t look like a ${p.name} key. Saved anyway.`, 'info');
+      try {
+        await api.aiSetKey(provider, v);
+        keyInput.value = '';
+        await persist();
+        toast(`${p.name} key saved securely`, 'success');
+        renderAi();
+      } catch (err) {
+        toast(clean(err));
+      }
+    };
+    keyInput.addEventListener('keydown', (e) => e.key === 'Enter' && void saveKey());
+
+    const modelRow = h('div');
+    if (provider === 'gemini' && hasKey) {
+      const select = h('select', { class: 'select' }, h('option', { value: 'auto' }, 'Automatic (best free model)'));
+      select.addEventListener('change', async () => {
+        settings.geminiModel = select.value;
+        await persist();
+      });
+      modelRow.append(h('label', { class: 'field' }, h('span', {}, 'Model'), select));
+      void api
+        .aiGeminiModels()
+        .then((models) => {
+          for (const m of models) select.add(new Option(m, m, false, settings.geminiModel === m));
+          if (!settings.geminiModel || settings.geminiModel === 'auto') select.value = 'auto';
+        })
+        .catch(() => {});
     }
+
+    aiBody.replaceChildren(
+      providerRow,
+      h('p', { class: 'muted' }, p.blurb),
+      h('div', { class: 'row' }, keyInput, button({ label: 'Save', kind: 'primary', onClick: saveKey })),
+      h(
+        'div',
+        { class: 'row' },
+        h('a', { href: p.keyUrl, target: '_blank', class: 'link' }, p.keyLabel),
+        hasKey
+          ? button({
+              label: 'Remove key',
+              kind: 'ghost',
+              onClick: async () => {
+                await api.aiSetKey(provider, null);
+                await persist();
+                renderAi();
+              },
+            })
+          : null,
+      ),
+      modelRow,
+      h(
+        'p',
+        { class: 'fine' },
+        provider === 'gemini'
+          ? 'When you ask a question, the open document (or a Space’s sources) is sent to Google to answer it. On the free tier Google may use prompts to improve its products, except in the UK, EEA and Switzerland. Keys are encrypted on this computer.'
+          : 'When you ask a question, the open document (or a Space’s sources) is sent to Anthropic to answer it. Keys are encrypted on this computer.',
+      ),
+    );
   };
-  keyInput.addEventListener('keydown', (e) => e.key === 'Enter' && void saveKey());
+  renderAi();
 
   openModal({
     title: 'Settings',
@@ -70,29 +173,7 @@ export async function openSettings() {
       'div',
       { class: 'settings' },
       h('section', {}, h('h3', {}, 'Appearance'), themeRow),
-      h(
-        'section',
-        {},
-        h('h3', {}, 'AI Assistant ', status),
-        h('p', { class: 'muted' }, 'The assistant uses Claude through your own Anthropic API key. The key is encrypted with your operating system’s keychain and never leaves this computer except to call the API.'),
-        h('div', { class: 'row' }, keyInput, button({ label: 'Save', kind: 'primary', onClick: saveKey })),
-        h(
-          'div',
-          { class: 'row' },
-          h('a', { href: 'https://console.anthropic.com/settings/keys', target: '_blank', class: 'link' }, 'Get an API key ↗'),
-          button({
-            label: 'Remove key',
-            kind: 'ghost',
-            onClick: async () => {
-              await api.aiSetKey(null);
-              hasKey = false;
-              renderStatus();
-              void refreshAssistant();
-            },
-          }),
-        ),
-        h('p', { class: 'fine' }, 'When you ask a question, the open document (or a Space’s sources) is sent to Anthropic to generate the answer.'),
-      ),
+      h('section', {}, h('h3', {}, 'AI Assistant'), aiBody),
       h(
         'section',
         {},

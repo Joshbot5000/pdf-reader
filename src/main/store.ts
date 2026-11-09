@@ -7,7 +7,8 @@ import type { AppState } from '../shared/ipc';
 
 const dir = () => app.getPath('userData');
 const statePath = () => join(dir(), 'state.json');
-const keyPath = () => join(dir(), 'anthropic-key.bin');
+export type AiProvider = 'gemini' | 'claude';
+const keyPath = (p: AiProvider) => join(dir(), p === 'claude' ? 'anthropic-key.bin' : 'gemini-key.bin');
 export const spacesDir = () => join(dir(), 'spaces');
 
 const empty = (): AppState => ({
@@ -16,7 +17,7 @@ const empty = (): AppState => ({
   templates: [],
   brand: null,
   spaces: [],
-  settings: { theme: 'system' },
+  settings: { theme: 'system', aiProvider: 'gemini' },
 });
 
 let cache: AppState | null = null;
@@ -54,23 +55,24 @@ export async function addRecent(path: string, name: string) {
 
 // ---------------------------------------------------------------- API key
 
-export async function saveApiKey(key: string | null) {
+export async function saveApiKey(provider: AiProvider, key: string | null) {
   if (!key) {
-    await rm(keyPath(), { force: true });
+    await rm(keyPath(provider), { force: true });
     return;
   }
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error('Secure storage is not available on this system, so the key cannot be saved safely.');
   }
   await mkdir(dir(), { recursive: true });
-  await writeFile(keyPath(), safeStorage.encryptString(key.trim()));
+  await writeFile(keyPath(provider), safeStorage.encryptString(key.trim()));
 }
 
-export async function loadApiKey(): Promise<string | null> {
-  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
-  if (!existsSync(keyPath()) || !safeStorage.isEncryptionAvailable()) return null;
+export async function loadApiKey(provider: AiProvider): Promise<string | null> {
+  const env = provider === 'claude' ? process.env.ANTHROPIC_API_KEY : (process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY);
+  if (env) return env;
+  if (!existsSync(keyPath(provider)) || !safeStorage.isEncryptionAvailable()) return null;
   try {
-    return safeStorage.decryptString(await readFile(keyPath()));
+    return safeStorage.decryptString(await readFile(keyPath(provider)));
   } catch {
     return null;
   }

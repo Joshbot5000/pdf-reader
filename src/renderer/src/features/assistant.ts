@@ -4,7 +4,7 @@
  * across several PDFs, documents and web pages.
  */
 import type { AiBlock, AiDoc, AiEvent, SlideOutline, Space } from '../../../shared/ipc';
-import { api, doc, on, setCurrent } from '../core/doc';
+import { activeTab, api, doc, on, setCurrent, tabs } from '../core/doc';
 import { scrollToPage } from '../core/viewer';
 import { button, formatBytes, h, icon, timeAgo, uid, type IconName } from '../ui/dom';
 import { markdown } from '../ui/markdown';
@@ -38,7 +38,10 @@ const ACTIONS: { label: string; icon: IconName; prompt: string }[] = [
 let panel: HTMLElement;
 let tab: 'doc' | 'spaces' = 'doc';
 let hasKey = false;
+let provider: 'gemini' | 'claude' = 'gemini';
+let model: string | null = null;
 let docConvo: Conversation = { id: uid(), messages: [] };
+const tabConvos = new Map<string, Conversation>();
 const spaceConvos = new Map<string, Conversation>();
 let spaces: Space[] = [];
 let activeSpace: string | null = null;
@@ -52,10 +55,20 @@ export function initAssistant(container: HTMLElement, settings: () => void) {
   panel = container;
   openSettings = settings;
   api.onAiEvent(handleEvent);
+  // Each open document keeps its own conversation.
   on('opened', () => {
-    forgetConvo(docConvo);
-    docConvo = { id: uid(), messages: [] };
+    const id = activeTab()?.id ?? '';
+    docConvo = tabConvos.get(id) ?? { id: uid(), messages: [] };
+    tabConvos.set(id, docConvo);
     if (!panel.hidden) render();
+  });
+  on('tabs', () => {
+    for (const [id, c] of tabConvos) {
+      if (!tabs.some((t) => t.id === id)) {
+        forgetConvo(c);
+        tabConvos.delete(id);
+      }
+    }
   });
   on('state', () => {
     if (!panel.hidden && tab === 'doc') updateStaleNote();
@@ -63,7 +76,10 @@ export function initAssistant(container: HTMLElement, settings: () => void) {
 }
 
 export async function refreshAssistant() {
-  hasKey = (await api.aiStatus()).hasKey;
+  const status = await api.aiStatus();
+  hasKey = status.hasKey;
+  provider = status.provider;
+  model = status.model;
   spaces = (await api.getState()).spaces;
   if (!panel.hidden) render();
 }
@@ -148,7 +164,9 @@ function render() {
         'div',
         { class: 'key-banner' },
         icon('key', 18),
-        h('div', {}, h('strong', {}, 'Connect Claude'), h('p', {}, 'Add your Anthropic API key to chat with documents. Your key is encrypted on this computer.')),
+        provider === 'gemini'
+          ? h('div', {}, h('strong', {}, 'Connect Gemini (free)'), h('p', {}, 'Get a free API key from Google AI Studio and paste it in Settings. No card needed.'))
+          : h('div', {}, h('strong', {}, 'Connect Claude'), h('p', {}, 'Add your Anthropic API key in Settings. Your key is encrypted on this computer.')),
         button({ label: 'Add key', kind: 'primary', onClick: openSettings }),
       )
     : '';
@@ -156,7 +174,12 @@ function render() {
     h(
       'div',
       { class: 'assistant-head' },
-      h('div', { class: 'assistant-title' }, h('span', { class: 'ai-orb' }, icon('ai', 16)), 'AI Assistant'),
+      h(
+        'div',
+        { class: 'assistant-title' },
+        h('span', { class: 'ai-orb' }, icon('ai', 16)),
+        h('span', {}, 'AI Assistant', h('small', { class: 'assistant-model', title: model ?? '' }, provider === 'gemini' ? 'Gemini · free' : 'Claude')),
+      ),
       h(
         'div',
         { class: 'tabs small', role: 'tablist' },
@@ -187,6 +210,7 @@ function renderDocTab(): HTMLElement {
   const view = chatView(docConvo, { docs: currentDocSource() ?? undefined }, () => {
     forgetConvo(docConvo);
     docConvo = { id: uid(), messages: [] };
+    tabConvos.set(activeTab()?.id ?? '', docConvo);
     render();
   });
   const stale = h('div', { class: 'stale-note', hidden: true }, icon('undo', 14), 'The document changed since this chat started. Start a new chat to include your edits.');
@@ -278,6 +302,22 @@ function renderMessage(m: UiMessage): HTMLElement {
   return el;
 }
 
+/**
+ * Turn page references written in the answer ("[p. 3]", "[Lease.pdf, p. 3]",
+ * "[pp. 4–5]") into numbered citation links, adding them to `sources`.
+ */
+function linkPageRefs(text: string, sources: { n: number; page?: number; doc: string | null; text: string }[]): string {
+  return text.replace(/\[(?:([^[\]]{1,80}?),\s*)?(?:pp?|pages?)\.?\s*(\d+)(?:\s*[-–]\s*\d+)?\]/gi, (_m, title: string | undefined, page: string) => {
+    const docTitle = title?.trim() || null;
+    let n = sources.findIndex((s) => s.page === Number(page) && s.doc === docTitle && !s.text) + 1;
+    if (!n) {
+      sources.push({ n: sources.length + 1, page: Number(page), doc: docTitle, text: '' });
+      n = sources.length;
+    }
+    return `\u2063${n}\u2063`;
+  });
+}
+
 function renderMessageBody(m: UiMessage): HTMLElement {
   if (m.role === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, m.text));
   const body = h('div', { class: 'md' });
@@ -296,9 +336,10 @@ function renderMessageBody(m: UiMessage): HTMLElement {
         text += `⁣${n}⁣`;
       }
     }
+    text = linkPageRefs(text, sources);
     body.innerHTML = markdown(text).replace(/⁣(\d+)⁣/g, (_m, n) => `<button type="button" class="cite" data-cite="${n}">${n}</button>`);
   } else if (m.text) {
-    body.innerHTML = markdown(m.text);
+    body.innerHTML = markdown(linkPageRefs(m.text, sources)).replace(/⁣(\d+)⁣/g, (_m, n) => `<button type="button" class="cite" data-cite="${n}">${n}</button>`);
   }
   const pending = !m.blocks && !m.error;
   const wrap = h(
@@ -320,7 +361,7 @@ function renderMessageBody(m: UiMessage): HTMLElement {
                 { type: 'button', class: 'source', dataset: { cite: String(s.n) }, title: s.text },
                 h('span', { class: 'cite' }, String(s.n)),
                 h('span', { class: 'source-loc' }, [s.doc && sources.some((x) => x.doc !== s.doc) ? s.doc : null, s.page ? `p.${s.page}` : null].filter(Boolean).join(' · ') || 'Source'),
-                h('span', { class: 'source-text' }, `“${s.text.trim().slice(0, 90)}${s.text.length > 90 ? '…' : ''}”`),
+                h('span', { class: 'source-text' }, s.text ? `“${s.text.trim().slice(0, 90)}${s.text.length > 90 ? '…' : ''}”` : 'Go to page'),
               ),
             ),
           )
@@ -332,13 +373,14 @@ function renderMessageBody(m: UiMessage): HTMLElement {
     if (!t) return;
     const s = sources[Number(t.dataset.cite) - 1];
     if (!s) return;
-    if (s.page && doc.pdf && (!s.doc || s.doc === doc.file?.name)) {
+    const sameDoc = !s.doc || s.doc === doc.file?.name || s.doc.replace(/\.pdf$/i, '') === doc.file?.name.replace(/\.pdf$/i, '');
+    if (s.page && doc.pdf && sameDoc && s.page <= doc.pdf.numPages) {
       setCurrent(s.page - 1);
       scrollToPage(s.page - 1);
       const phrase = s.text.trim().split(/\s+/).slice(0, 8).join(' ');
       if (phrase) setTimeout(() => searchFor(phrase), 350);
     } else {
-      toast(`“${s.text.trim().slice(0, 200)}”${s.doc ? ` · ${s.doc}` : ''}`, 'info', 6000);
+      toast(s.text ? `“${s.text.trim().slice(0, 200)}”${s.doc ? ` · ${s.doc}` : ''}` : `${s.doc ?? 'This document'}, page ${s.page}`, 'info', 6000);
     }
   });
   return wrap;

@@ -14,6 +14,9 @@ export type MenuAction =
   | 'zoomOut'
   | 'fitWidth'
   | 'palette'
+  | 'closeTab'
+  | 'nextTab'
+  | 'prevTab'
   | 'undo'
   | 'redo'
   | 'home'
@@ -86,7 +89,7 @@ export interface AppState {
   templates: FormTemplate[];
   brand: BrandProfile | null;
   spaces: Space[];
-  settings: { theme: 'system' | 'dark' | 'light' };
+  settings: { theme: 'system' | 'dark' | 'light'; aiProvider?: 'gemini' | 'claude'; geminiModel?: string };
 }
 
 // ---------------------------------------------------------------- OCR
@@ -122,6 +125,15 @@ export type AiEvent =
   | { requestId: string; type: 'thinking' }
   | { requestId: string; type: 'done'; blocks: AiBlock[]; stopReason: string | null }
   | { requestId: string; type: 'error'; message: string };
+
+export interface AiStatus {
+  provider: 'gemini' | 'claude';
+  /** A key is set for the active provider. */
+  hasKey: boolean;
+  keys: { gemini: boolean; claude: boolean };
+  /** The model in use, when known. */
+  model: string | null;
+}
 
 export interface AiChatRequest {
   conversationId: string;
@@ -162,8 +174,10 @@ export interface DesktopApi {
 
   ocr(png: Uint8Array): Promise<OcrWord[]>;
 
-  aiStatus(): Promise<{ hasKey: boolean }>;
-  aiSetKey(key: string | null): Promise<void>;
+  aiStatus(): Promise<AiStatus>;
+  aiSetKey(provider: 'gemini' | 'claude', key: string | null): Promise<void>;
+  /** Free Gemini models this key can use (best first). */
+  aiGeminiModels(): Promise<string[]>;
   aiChat(req: AiChatRequest): Promise<string>;
   aiCancel(requestId: string): void;
   aiForget(conversationId: string): void;

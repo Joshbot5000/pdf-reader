@@ -13,6 +13,7 @@ Everything except the AI Assistant runs on your computer; nothing is uploaded.
 | Tool | What it does |
 |---|---|
 | **Home** | Open or drop a PDF, recent files, launcher for every tool |
+| **Tabs** | Open several PDFs at once and switch between them in the tab strip at the top; each keeps its own edits, undo history and AI chat. Ctrl/⌘+W closes a tab (asking to save), Ctrl+Tab switches |
 | **Edit** | **Edit text**: double-click (or click with Edit text) any paragraph of the PDF's own text to change or delete it. The original is removed from the page and the new text uses the document's own font, or the same font installed on your computer, at the same size and colour. Add new text, highlight (4 colours), draw, **Eraser** (removes only your pen strokes and highlights, never the document), white-out; tool-shaped cursors; undo/redo |
 | **Search** | Live find with highlighted matches, match case, whole words; phrases match across line breaks |
 | **Organize** | Page grid with multi-select: rotate, delete, reorder by drag, insert blank pages or another PDF, extract pages to a new PDF |
@@ -22,22 +23,37 @@ Everything except the AI Assistant runs on your computer; nothing is uploaded.
 | **Scan & OCR** | Detects scanned pages and adds an invisible, selectable text layer (English) |
 | **Compare** | Side-by-side view of two PDFs with every added, removed and changed word highlighted, a change list and synced scrolling |
 | **Brand** | Stamp a logo, name and clickable custom URL on agreements, with a live preview |
-| **AI Assistant** | Chat with the open PDF with page citations; one-click actions (Summarize, Key points, Explain simply, Dates & obligations, Risky terms, Quiz me, Draft email); remix into a PowerPoint deck |
+| **AI Assistant** | Free with Gemini (or Claude). Chat with the open PDF with page citations; one-click actions (Summarize, Key points, Explain simply, Dates & obligations, Risky terms, Quiz me, Draft email); remix into a PowerPoint deck |
 | **PDF Spaces** | Collections of PDFs, Word documents, text files and web links to ask questions across, with optional custom instructions |
 | **Command palette** | <kbd>Ctrl/⌘ K</kbd> searches every command |
 
 Light and dark themes follow the system or can be chosen in Settings.
 
-### AI Assistant setup
+### AI Assistant setup (free)
 
-Open **Settings** and paste an [Anthropic API key](https://console.anthropic.com/settings/keys).
-It is encrypted with the operating system keychain (Electron `safeStorage`) and
-only used from the main process. The assistant uses `claude-opus-5-5` with
-citations, prompt caching for follow-up questions, and server-side refusal
-fallback. When you ask a question, the open document (or the Space's sources) is
-sent to Anthropic.
+The assistant uses **Google Gemini's free tier** by default:
 
-Setting `ANTHROPIC_API_KEY` in the environment also works.
+1. Go to [Google AI Studio → API keys](https://aistudio.google.com/apikey), sign in
+   with a Google account and click **Create API key** (no card needed).
+2. In PDF Reader open **Settings → AI Assistant**, choose **Google Gemini**, paste
+   the key and click **Save**.
+
+The app picks the best free Flash model your key can use from Google's live
+model list, and if that model's free daily limit is reached it automatically
+moves to the next one (e.g. Flash-Lite). PDFs are sent whole, so Gemini reads
+the pages themselves, and answers cite pages as clickable links. Free-tier
+limits change from time to time; your current limits are shown in Google AI
+Studio.
+
+Anthropic Claude is also supported (paid; choose it in Settings and add an
+[Anthropic API key](https://console.anthropic.com/settings/keys)): it uses
+`claude-opus-5-5` with exact quoted citations, prompt caching and server-side
+refusal fallback.
+
+Keys are encrypted with the operating system keychain (Electron `safeStorage`)
+and only used from the main process. `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`
+environment variables also work. When you ask a question, the open document (or
+the Space's sources) is sent to the provider you chose.
 
 ### Not included
 

@@ -2,8 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, net, protocol, 
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { AiChatRequest, AppState, MenuAction, OpenedFile, SlideOutline } from '../shared/ipc';
+import type { AiChatRequest, AiStatus, AppState, MenuAction, OpenedFile, SlideOutline } from '../shared/ipc';
 import * as ai from './ai';
+import * as gemini from './gemini';
 import { recognize, shutdownOcr } from './ocr';
 import { buildDeck } from './slides';
 import { findFont, warmFontIndex } from './fonts';
@@ -130,9 +131,13 @@ function buildMenu() {
           { type: 'separator' },
           item('Insert Pages from PDF…', 'insertPdf'),
           { type: 'separator' },
+          item('Close Document', 'closeTab', 'CmdOrCtrl+W'),
+          item('Next Document', 'nextTab', 'Ctrl+Tab'),
+          item('Previous Document', 'prevTab', 'Ctrl+Shift+Tab'),
+          { type: 'separator' },
           item('Settings…', 'settings', 'CmdOrCtrl+,'),
           { type: 'separator' },
-          isMac ? { role: 'close' } : { role: 'quit' },
+          isMac ? { role: 'close', accelerator: 'CmdOrCtrl+Shift+W' } : { role: 'quit' },
         ],
       },
       // Undo/redo go to the renderer, which undoes text in a focused field
@@ -282,15 +287,31 @@ function registerIpc() {
   ipcMain.handle('ocr:recognize', (_e, png: unknown) => recognize(bytes(png, 'image')));
 
   // ---- AI
-  ipcMain.handle('ai:status', async () => ({ hasKey: !!(await loadApiKey()) }));
-  ipcMain.handle('ai:setKey', async (_e, key: unknown) => {
-    await saveApiKey(typeof key === 'string' && key.trim() ? key : null);
+  // The AI Assistant uses Gemini (free) by default, or Claude if chosen in Settings.
+  const provider = async () => (await loadState()).settings.aiProvider ?? 'gemini';
+  ipcMain.handle('ai:status', async (): Promise<AiStatus> => {
+    const p = await provider();
+    const keys = { gemini: !!(await loadApiKey('gemini')), claude: !!(await loadApiKey('claude')) };
+    return { provider: p, hasKey: keys[p], keys, model: p === 'gemini' ? gemini.currentModel() : 'claude-opus-5-5' };
+  });
+  ipcMain.handle('ai:setKey', async (_e, which: unknown, key: unknown) => {
+    if (which !== 'gemini' && which !== 'claude') throw new Error('Unknown AI provider');
+    await saveApiKey(which, typeof key === 'string' && key.trim() ? key : null);
     ai.resetClient();
   });
-  ipcMain.handle('ai:chat', (e, req: AiChatRequest) => ai.chat(e.sender, req));
-  ipcMain.on('ai:cancel', (_e, id: unknown) => typeof id === 'string' && ai.cancel(id));
-  ipcMain.on('ai:forget', (_e, id: unknown) => typeof id === 'string' && ai.forget(id));
-  ipcMain.handle('ai:slides', (_e, req) => ai.slides(req));
+  ipcMain.handle('ai:geminiModels', () => gemini.listModels());
+  ipcMain.handle('ai:chat', async (e, req: AiChatRequest) => ((await provider()) === 'claude' ? ai.chat(e.sender, req) : gemini.chat(e.sender, req)));
+  ipcMain.on('ai:cancel', (_e, id: unknown) => {
+    if (typeof id !== 'string') return;
+    ai.cancel(id);
+    gemini.cancel(id);
+  });
+  ipcMain.on('ai:forget', (_e, id: unknown) => {
+    if (typeof id !== 'string') return;
+    ai.forget(id);
+    gemini.forget(id);
+  });
+  ipcMain.handle('ai:slides', async (_e, req) => ((await provider()) === 'claude' ? ai.slides(req) : gemini.slides(req)));
   ipcMain.handle('slides:save', async (e, outline: SlideOutline) => {
     const data = await buildDeck(outline);
     const win = BrowserWindow.fromWebContents(e.sender)!;

@@ -33,12 +33,12 @@ let clientKey: string | null = null;
 
 export class NoApiKeyError extends Error {
   constructor() {
-    super('Add your Anthropic API key in Settings to use the AI Assistant.');
+    super('Add your Anthropic API key in Settings to use Claude.');
   }
 }
 
 async function getClient(): Promise<Anthropic> {
-  const key = await loadApiKey();
+  const key = await loadApiKey('claude');
   if (!key) throw new NoApiKeyError();
   if (!client || key !== clientKey) {
     client = new Anthropic({ apiKey: key });
@@ -78,7 +78,7 @@ function toDocBlocks(docs: AiDoc[], citations: boolean): DocBlock[] {
   return blocks;
 }
 
-async function spaceDocs(spaceId: string): Promise<AiDoc[]> {
+export async function spaceDocs(spaceId: string): Promise<AiDoc[]> {
   const space = (await loadState()).spaces.find((s) => s.id === spaceId);
   if (!space) throw new Error('That Space no longer exists.');
   if (!space.sources.length) throw new Error('Add at least one source to this Space first.');
@@ -92,7 +92,7 @@ async function spaceDocs(spaceId: string): Promise<AiDoc[]> {
   );
 }
 
-async function spaceInstructions(spaceId?: string): Promise<string> {
+export async function spaceInstructions(spaceId?: string): Promise<string> {
   if (!spaceId) return '';
   const space = (await loadState()).spaces.find((s) => s.id === spaceId);
   return space?.instructions.trim() ? `\n\nThe user set these instructions for this Space:\n${space.instructions.trim()}` : '';

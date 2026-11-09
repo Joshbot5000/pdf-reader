@@ -30,7 +30,8 @@ const api: DesktopApi = {
   ocr: (png) => ipcRenderer.invoke('ocr:recognize', png),
 
   aiStatus: () => ipcRenderer.invoke('ai:status'),
-  aiSetKey: (key) => ipcRenderer.invoke('ai:setKey', key),
+  aiSetKey: (provider, key) => ipcRenderer.invoke('ai:setKey', provider, key),
+  aiGeminiModels: () => ipcRenderer.invoke('ai:geminiModels'),
   aiChat: (req) => ipcRenderer.invoke('ai:chat', req),
   aiCancel: (id) => ipcRenderer.send('ai:cancel', id),
   aiForget: (id) => ipcRenderer.send('ai:forget', id),

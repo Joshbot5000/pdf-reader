@@ -7,7 +7,8 @@ import './styles.css';
 import type { MenuAction } from '../../shared/ipc';
 import { deletePage, rotatePage } from '../../shared/pdfOps';
 import {
-  api, applyEdit, closeDocument, doc, isDirty, on, openDialog, openPath, pageCount, redo, save, setCurrent, setDiscardConfirm, undo,
+  activeTab, api, applyEdit, closeTab, doc, isDirty, on, openDialog, openPath, pageCount, redo, save, saveAll, setCurrent,
+  setDiscardConfirm, switchTab, tabDirty, tabs, undo,
 } from './core/doc';
 import { initViewer, scrollToPage, setInteraction, setZoom, view, type PageDblClick } from './core/viewer';
 import { annotateRibbon, pen, setTool, type Tool as PenTool } from './features/annotate';
@@ -252,20 +253,16 @@ function refreshChrome() {
   redoBtn.disabled = !canEdit || !doc.redo.length;
   document.body.classList.toggle('has-doc', hasDoc);
   document.body.classList.toggle('busy', doc.busy);
-  const chip = $('#doc-chip');
-  chip.hidden = !doc.file;
-  if (doc.file) {
-    chip.replaceChildren(
-      icon('file', 14),
-      h('span', { class: 'doc-name', title: doc.file.path ?? doc.file.name }, doc.file.name),
-      isDirty() ? h('span', { class: 'dirty-dot', title: 'Unsaved changes' }) : '',
-      !doc.editable && doc.pdf ? h('span', { class: 'pill' }, 'Read-only') : '',
-    );
-  }
+  renderTabs();
   document.title = doc.file ? `${doc.file.name}${isDirty() ? ' •' : ''} — PDF Reader` : 'PDF Reader';
   pagerEl.hidden = !hasDoc || !['edit', 'sign', 'prepare', 'redact', 'ocr', 'brand'].includes(mode.id);
   updatePager();
-  api.setDocState({ dirty: isDirty(), path: doc.file?.path ?? null, name: doc.file?.name ?? null });
+  const dirtyTabs = tabs.filter(tabDirty);
+  api.setDocState({
+    dirty: dirtyTabs.length > 0,
+    path: doc.file?.path ?? null,
+    name: dirtyTabs.length > 1 ? `${dirtyTabs.length} documents` : (dirtyTabs[0]?.file.name ?? doc.file?.name ?? null),
+  });
 }
 
 // ======================================================================= commands
@@ -285,7 +282,14 @@ function commands(): Command[] {
     { id: 'open', label: 'Open PDF…', group: 'File', icon: 'open', shortcut: `${mod}O`, run: openAndEdit },
     { id: 'save', label: 'Save', group: 'File', icon: 'save', shortcut: `${mod}S`, enabled: () => isDirty(), run: () => save() },
     { id: 'saveas', label: 'Save as…', group: 'File', icon: 'download', enabled: hasDoc, run: () => save(true) },
-    { id: 'close', label: 'Close document', group: 'File', icon: 'close', enabled: hasDoc, run: closeDoc },
+    { id: 'close', label: 'Close document', group: 'File', icon: 'close', shortcut: `${mod}W`, enabled: hasDoc, run: closeDoc },
+    ...tabs.filter((t) => t !== activeTab()).map((t): Command => ({
+      id: `tab-${t.id}`, label: `Switch to ${t.file.name}`, group: 'Open documents', icon: 'file',
+      run: async () => {
+        await switchTab(t);
+        if (mode.id === 'home') await setMode('edit');
+      },
+    })),
     { id: 'home', label: 'Go to Home', group: 'File', icon: 'home', run: () => setMode('home') },
     ...MODES.filter((m) => m.id !== 'home').map((m): Command => ({ id: `mode-${m.id}`, label: m.label, group: 'Tools', icon: m.icon, keywords: m.blurb, run: () => setMode(m.id) })),
     toolCmd('edittext', 'Edit existing text', 'edit', 'E'),
@@ -324,7 +328,7 @@ function commands(): Command[] {
 const palette = () => openPalette(commands());
 
 async function openAndEdit() {
-  await openDialog();
+  if ((await openDialog()) && mode.id === 'home') await setMode('edit');
 }
 
 /** Adobe-style prompt before leaving a document with unsaved changes. Resolves true to continue. */
@@ -346,9 +350,74 @@ async function askToSave(): Promise<boolean> {
 }
 
 async function closeDoc() {
-  if (!(await askToSave())) return;
-  closeDocument();
-  await setMode('home');
+  const tab = activeTab();
+  if (!tab || !(await closeTab(tab))) return;
+  if (!tabs.length) await setMode('home');
+}
+
+// ======================================================================= tabs
+
+const tabsEl = $('#doc-tabs');
+
+function renderTabs() {
+  const current = activeTab();
+  tabsEl.hidden = !tabs.length;
+  tabsEl.replaceChildren(
+    ...tabs.map((t) => {
+      const isActive = t === current;
+      const name = isActive && doc.file ? doc.file.name : t.file.name;
+      const el = h(
+        'div',
+        {
+          class: `doc-tab${isActive ? ' active' : ''}`,
+          role: 'tab',
+          tabIndex: 0,
+          title: (isActive ? doc.file?.path : t.file.path) ?? name,
+          attrs: { 'aria-selected': String(isActive) },
+        },
+        icon('file', 13),
+        h('span', { class: 'doc-name' }, name),
+        tabDirty(t) ? h('span', { class: 'dirty-dot', title: 'Unsaved changes' }) : '',
+        isActive && !doc.editable && doc.pdf ? h('span', { class: 'pill' }, 'Read-only') : '',
+        h('button', {
+          class: 'tab-close',
+          type: 'button',
+          title: 'Close (Ctrl+W)',
+          attrs: { 'aria-label': `Close ${name}` },
+          on: {
+            click: async (e) => {
+              e.stopPropagation();
+              if ((await closeTab(t)) && !tabs.length) await setMode('home');
+            },
+          },
+        }, icon('close', 12)),
+      );
+      const open = async () => {
+        await switchTab(t);
+        if (mode.id === 'home') await setMode('edit');
+      };
+      el.addEventListener('click', () => void open());
+      el.addEventListener('keydown', (e) => e.key === 'Enter' && void open());
+      el.addEventListener('auxclick', (e) => {
+        if (e.button !== 1) return;
+        void closeTab(t).then(async (ok) => {
+          if (ok && !tabs.length) await setMode('home');
+        });
+      });
+      return el;
+    }),
+    h('button', { class: 'tab-add', type: 'button', title: 'Open another PDF (Ctrl+O)', attrs: { 'aria-label': 'Open another PDF' }, on: { click: () => void openAndEdit() } }, icon('plus', 15)),
+  );
+  tabsEl.querySelector('.doc-tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+on('tabs', renderTabs);
+
+function cycleTab(delta: number) {
+  const t = activeTab();
+  if (!t || tabs.length < 2) return;
+  const next = tabs[(tabs.indexOf(t) + delta + tabs.length) % tabs.length];
+  void switchTab(next);
 }
 
 // ======================================================================= wiring
@@ -359,9 +428,9 @@ initCompare($('#compare'));
 initOcr($('#ocr-banner'));
 initAssistant($('#assistant'), () => void openSettings());
 setDiscardConfirm(askToSave);
-// "Save" in the close-window prompt: save, then let the window close.
+// "Save" in the close-window prompt: save every changed document, then close.
 api.onSaveAndClose(async () => {
-  if (await save()) api.closeWindow();
+  if (await saveAll()) api.closeWindow();
 });
 buildRail();
 buildTitlebar();
@@ -396,6 +465,11 @@ document.addEventListener('keydown', (e) => {
   if (mod && key === 'k') {
     e.preventDefault();
     palette();
+    return;
+  }
+  if (e.ctrlKey && key === 'tab') {
+    e.preventDefault();
+    cycleTab(e.shiftKey ? -1 : 1);
     return;
   }
   if (isTyping(e.target)) return;
@@ -465,6 +539,9 @@ const menuActions: Record<MenuAction, () => unknown> = {
   zoomOut: () => setZoom(view.scale / 1.2),
   fitWidth: () => setZoom('fit'),
   palette,
+  closeTab: closeDoc,
+  nextTab: () => cycleTab(1),
+  prevTab: () => cycleTab(-1),
   undo: () => menuUndo('undo'),
   redo: () => menuUndo('redo'),
   home: () => setMode('home'),

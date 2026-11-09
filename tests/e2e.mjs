@@ -73,7 +73,7 @@ const rail = (mode) => win.click(`.rail-btn[data-mode="${mode}"]`);
 await step('opens the file passed on the command line', async () => {
   await win.waitForSelector('.page .textLayer span');
   assert.equal(await win.locator('.page').count(), 3);
-  assert.match(await win.locator('#doc-chip').innerText(), /Tenancy agreement\.pdf/);
+  assert.match(await win.locator('.doc-tab.active').innerText(), /Tenancy agreement\.pdf/);
 });
 
 await step('searches and highlights matches', async () => {
@@ -264,6 +264,41 @@ await step('saves to disk', async () => {
   assert.match(await win.title(), /•/);
   await win.click('#btn-save');
   await win.waitForFunction(() => !document.title.includes('•'));
+});
+
+await step('works on several documents in tabs, and Home stays clickable', async () => {
+  // Open a second document from the + in the tab strip.
+  await stubOpenDialog([revisedPath]);
+  await win.click('.tab-add');
+  await win.waitForFunction(() => document.querySelectorAll('.doc-tab').length === 2);
+  assert.match(await win.locator('.doc-tab.active').innerText(), /revised/);
+  await win.waitForFunction(() => (document.querySelector('.page .textLayer')?.textContent ?? '').includes('£1,950'));
+  // Edit it, leaving the change unsaved.
+  await rail('edit');
+  await win.click('[data-tool="text"]');
+  const b = await pageBox(0);
+  await win.mouse.click(b.x + 80, b.y + 60);
+  await win.keyboard.type('Draft');
+  await win.keyboard.press('Enter');
+  await idle();
+  await win.waitForSelector('.doc-tab.active .dirty-dot');
+  // Switch back to the first document: its own content and saved state come back.
+  await win.click('.doc-tab >> nth=0');
+  await win.waitForFunction(() => [...document.querySelectorAll('.page .textLayer')].some((l) => l.textContent.includes('Landon & Co. Solicitors')));
+  assert.equal(await win.locator('.doc-tab >> nth=0').locator('.dirty-dot').count(), 0);
+  assert.equal(await win.locator('.doc-tab >> nth=1').locator('.dirty-dot').count(), 1);
+  // Go Home while documents are open: Home must respond to clicks.
+  await win.click('.rail-btn[data-mode="home"]');
+  await win.click('.recent >> text=revised', { timeout: 5000 });
+  await win.waitForFunction(() => document.body.dataset.mode === 'edit');
+  assert.match(await win.locator('.doc-tab.active').innerText(), /revised/);
+  assert.equal(await win.locator('.doc-tab').count(), 2, 'reopening an open file switches to its tab');
+  // Close the edited tab: asked to save first.
+  await win.click('.doc-tab.active .tab-close');
+  await win.waitForSelector('.modal >> text=Save changes to');
+  await win.click('.modal button:has-text("Don’t Save")');
+  await win.waitForFunction(() => document.querySelectorAll('.doc-tab').length === 1);
+  await win.waitForFunction(() => [...document.querySelectorAll('.page .textLayer')].some((l) => l.textContent.includes('Landon & Co. Solicitors')));
 });
 
 await step('compares two versions', async () => {

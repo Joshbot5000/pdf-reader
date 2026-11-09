@@ -77,6 +77,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 const dir = mkdtempSync(join(tmpdir(), 'pdf-reader-ai-'));
 const userData = join(dir, 'profile');
 mkdirSync(userData);
+// This suite covers the Claude provider; tests/e2e-gemini.mjs covers Gemini.
+writeFileSync(join(userData, 'state.json'), JSON.stringify({ settings: { theme: 'system', aiProvider: 'claude' } }));
 const pdfPath = join(dir, 'Tenancy agreement.pdf');
 writeFileSync(pdfPath, await tenancyAgreement());
 

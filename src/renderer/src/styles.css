@@ -231,7 +231,80 @@ button.chip:disabled { opacity: 0.45; cursor: default; }
 }
 body.platform-darwin #titlebar { padding-left: 84px; }
 body:not(.platform-darwin) #titlebar { padding-right: 150px; }
-#titlebar button, #titlebar input, #titlebar .doc-chip { -webkit-app-region: no-drag; }
+#titlebar button, #titlebar input, #titlebar /* document tabs */
+.doc-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 46%;
+  margin-left: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-app-region: no-drag;
+}
+.doc-tabs::-webkit-scrollbar { display: none; }
+.doc-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 96px;
+  max-width: 220px;
+  height: 30px;
+  padding: 0 4px 0 11px;
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.doc-tab:hover { background: var(--surface-2); color: var(--text); }
+.doc-tab.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border); }
+.doc-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--grad);
+}
+.doc-tab .doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.doc-tab .icon { color: #f2495c; flex: none; }
+.tab-close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  opacity: 0;
+  flex: none;
+}
+.doc-tab:hover .tab-close, .doc-tab.active .tab-close { opacity: 1; }
+.tab-close:hover { background: var(--surface-3); color: var(--text); }
+.doc-tab .dirty-dot + .tab-close { margin-left: -2px; }
+.tab-add {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tab-add:hover { background: var(--surface-2); color: var(--text); }
+.doc-chip { -webkit-app-region: no-drag; }
 .brand-mark {
   width: 26px;
   height: 26px;
@@ -523,6 +596,11 @@ body.assistant-open .ai-cta { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgb(176
 
 #stage { position: relative; flex: 1; min-height: 0; }
 #viewer, #organizer, #compare, #home { position: absolute; inset: 0; overflow: auto; outline: none; }
+/* Each view is its own stacking context, so page layers (text, tools) can never
+   sit above another view such as Home. */
+#viewer, #organizer, #compare { isolation: isolate; }
+#home { z-index: 5; }
+body[data-mode='home'] #viewer, body[data-mode='home'] #organizer, body[data-mode='home'] #compare { visibility: hidden; }
 #viewer, #organizer {
   background-color: var(--canvas);
   background-image: radial-gradient(var(--canvas-dot) 1px, transparent 1px);
@@ -759,6 +837,7 @@ body.interacting .page .overlay { pointer-events: auto; cursor: var(--tool-curso
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   opacity: 0.55;
+  pointer-events: none;
 }
 .drop-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
 .drop-glow {
@@ -769,6 +848,7 @@ body.interacting .page .overlay { pointer-events: auto; cursor: var(--tool-curso
   border-radius: 50%;
   background: radial-gradient(circle, rgb(176 92 255 / 0.3), transparent 65%);
   z-index: -1;
+  pointer-events: none;
   animation: float 8s ease-in-out infinite;
 }
 @keyframes float { 50% { transform: translate(30px, 20px) scale(1.1); } }
@@ -1051,6 +1131,8 @@ body.interacting .page .overlay { pointer-events: auto; cursor: var(--tool-curso
 @keyframes slide-in { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
 .assistant-head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border); }
 .assistant-title { display: flex; align-items: center; gap: 9px; font-weight: 700; flex: 1; }
+.assistant-title > span:last-child { display: grid; line-height: 1.2; }
+.assistant-model { color: var(--faint); font-weight: 600; font-size: 11px; }
 .ai-orb {
   display: grid;
   place-items: center;
@@ -1234,6 +1316,22 @@ body.interacting .page .overlay { pointer-events: auto; cursor: var(--tool-curso
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px 18px; }
 .modal-actions .btn { height: 36px; padding: 0 16px; }
 .settings section { padding: 4px 0 18px; }
+.provider-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.provider-card {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.provider-card:hover { border-color: var(--border-2); }
+.provider-card.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.provider-name { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+.provider-card small { color: var(--faint); }
 .settings section + section { border-top: 1px solid var(--border); padding-top: 16px; }
 .settings h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 14px; }
 .settings p { margin: 0 0 6px; }

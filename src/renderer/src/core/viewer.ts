@@ -29,6 +29,8 @@ export interface PageView {
   rendered: boolean;
   /** Incremented per render request so stale renders are dropped. */
   token: number;
+  /** Document version this page belongs to; pages of a closed version are never drawn. */
+  gen: number;
 }
 
 export interface Interaction {
@@ -137,6 +139,7 @@ async function refresh() {
     // Same pages, same sizes: keep everything on screen and redraw only what changed.
     view.views.forEach((pv, i) => {
       pv.page = pages[i];
+      pv.gen = gen;
       pv.viewport = pages[i].getViewport({ scale: view.scale });
       if (changed && !changed.has(i)) return;
       pv.rendered = false;
@@ -176,7 +179,7 @@ function createView(page: PDFPageProxy, index: number): PageView {
     h('div', { class: 'page-number' }, String(index + 1)),
   );
   el.style.setProperty('--total-scale-factor', String(view.scale));
-  const pv: PageView = { index, el, canvas, textLayer, decor, overlay, page, viewport, rendered: false, token: 0 };
+  const pv: PageView = { index, el, canvas, textLayer, decor, overlay, page, viewport, rendered: false, token: 0, gen: doc.generation };
   attachInteraction(pv);
   return pv;
 }
@@ -218,6 +221,9 @@ async function replaceViews(pages: PDFPageProxy[], anchor: number) {
 }
 
 async function renderPage(pv: PageView, detached = false) {
+  // A page of a document version that has since been replaced (tab switch,
+  // edit) is skipped; the new version's pages take over.
+  if (pv.gen !== doc.generation) return;
   const token = ++pv.token;
   pv.rendered = true;
   const gen = doc.generation;
@@ -230,7 +236,8 @@ async function renderPage(pv: PageView, detached = false) {
   try {
     await page.render({ canvas, viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined }).promise;
   } catch (err) {
-    if (!(err instanceof Error && err.name === 'RenderingCancelledException')) console.error(err);
+    const stale = gen !== doc.generation || (err instanceof Error && err.name === 'RenderingCancelledException');
+    if (!stale) console.error(err);
     if (token === pv.token) pv.rendered = false;
     return;
   }
@@ -259,7 +266,11 @@ export async function renderToCanvas(pdf: PDFDocumentProxy | PDFPageProxy, index
   const vp = page.getViewport({ scale: (cssWidth / base.width) * Math.min(2, window.devicePixelRatio || 1) });
   // Draw off-screen, then copy, so an existing thumbnail never blanks.
   const off = h('canvas', { width: Math.floor(vp.width), height: Math.floor(vp.height) });
-  await page.render({ canvas: off, viewport: vp }).promise.catch(() => {});
+  try {
+    await page.render({ canvas: off, viewport: vp }).promise;
+  } catch {
+    return canvas; // the document was closed or replaced meanwhile
+  }
   canvas.width = off.width;
   canvas.height = off.height;
   canvas.getContext('2d')!.drawImage(off, 0, 0);

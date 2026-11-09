@@ -41,12 +41,114 @@ export const doc = {
   text: null as Promise<PageText[]> | null,
 };
 
-export type DocEvent = 'opened' | 'closed' | 'loaded' | 'current' | 'state';
+export type DocEvent = 'opened' | 'closed' | 'loaded' | 'current' | 'state' | 'tabs';
 const bus = new EventTarget();
 export const on = (e: DocEvent, fn: () => void) => bus.addEventListener(e, fn);
 export const emit = (e: DocEvent) => bus.dispatchEvent(new Event(e));
 
 export const isDirty = () => doc.bytes !== null && doc.bytes !== doc.savedBytes;
+
+// ======================================================================= tabs
+
+/** An open document. The active tab's state lives in `doc` while it is active. */
+export interface Tab {
+  id: string;
+  file: { path: string | null; name: string };
+  bytes: Bytes;
+  savedBytes: Bytes;
+  undo: Bytes[];
+  redo: Bytes[];
+  current: number;
+  editable: boolean;
+}
+
+export const tabs: Tab[] = [];
+let active: Tab | null = null;
+let tabSeq = 0;
+
+export const activeTab = () => active;
+export const tabDirty = (t: Tab) => (t === active ? isDirty() : t.bytes !== t.savedBytes);
+export const anyDirty = () => tabs.some(tabDirty);
+
+/** Copy the live document state back into its tab. */
+function stash() {
+  if (!active || !doc.bytes || !doc.file) return;
+  Object.assign(active, {
+    file: doc.file,
+    bytes: doc.bytes,
+    savedBytes: doc.savedBytes ?? doc.bytes,
+    undo: doc.undo,
+    redo: doc.redo,
+    current: doc.current,
+    editable: doc.editable,
+  });
+}
+
+/** Make a tab the live document. */
+async function activate(tab: Tab) {
+  stash();
+  active = tab;
+  Object.assign(doc, {
+    file: tab.file,
+    savedBytes: tab.savedBytes,
+    undo: tab.undo,
+    redo: tab.redo,
+    current: tab.current,
+    editable: tab.editable,
+  });
+  pendingScroll = tab.current;
+  await setBytes(tab.bytes);
+  emit('opened');
+  emit('tabs');
+  emit('state');
+}
+
+/** Switch to another open document (ignored while an edit is being applied). */
+export async function switchTab(tab: Tab): Promise<void> {
+  if (tab === active || doc.busy || !tabs.includes(tab)) return;
+  await activate(tab);
+}
+
+/** Close a tab; asks to save it first if it has unsaved changes. Resolves false if cancelled. */
+export async function closeTab(tab: Tab): Promise<boolean> {
+  if (tabDirty(tab)) {
+    if (tab !== active) await switchTab(tab);
+    if (!(await confirmDiscard())) return false;
+  }
+  const i = tabs.indexOf(tab);
+  if (i < 0) return true;
+  tabs.splice(i, 1);
+  if (tab === active) {
+    active = null;
+    const next = tabs[Math.min(i, tabs.length - 1)];
+    if (next) await activate(next);
+    else closeDocument();
+  }
+  emit('tabs');
+  return true;
+}
+
+/** Save every document with unsaved changes (used when the window closes). */
+export async function saveAll(): Promise<boolean> {
+  stash();
+  for (const t of tabs.filter(tabDirty)) {
+    if (t === active) {
+      if (!(await save())) return false;
+      continue;
+    }
+    if (!t.file.path) return false;
+    try {
+      await api.save(t.file.path, t.bytes);
+      t.savedBytes = t.bytes;
+    } catch (err) {
+      toast(`Could not save ${t.file.name}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+  emit('tabs');
+  emit('state');
+  return true;
+}
 export const pageCount = () => doc.pdf?.numPages ?? 0;
 
 /** Load any PDF bytes with pdf.js (also used for compare and Spaces previews). */
@@ -62,19 +164,19 @@ export function loadPdf(bytes: Bytes): PDFDocumentLoadingTask {
   });
 }
 
+/** Open a file in a new tab (or switch to it if it's already open). */
 export async function openFile(file: OpenedFile): Promise<boolean> {
-  const prev = { ...doc };
-  doc.file = { path: file.path, name: file.name };
-  doc.undo = [];
-  doc.redo = [];
-  doc.savedBytes = file.data;
-  doc.current = 0;
-  doc.editable = false;
+  const existing = file.path ? tabs.find((t) => t.file.path === file.path) : undefined;
+  if (existing) {
+    await switchTab(existing);
+    return true;
+  }
+  // Check it opens before giving it a tab.
   try {
-    await setBytes(file.data);
+    const probe = loadPdf(file.data);
+    await probe.promise;
+    void probe.destroy();
   } catch (err) {
-    Object.assign(doc, { file: prev.file, undo: prev.undo, redo: prev.redo, savedBytes: prev.savedBytes, current: prev.current, editable: prev.editable });
-    doc.bytes = prev.bytes; // the previous document (if any) is still loaded
     const msg =
       err instanceof Error && err.name === 'PasswordException'
         ? 'This PDF is password-protected, which is not supported yet.'
@@ -82,15 +184,25 @@ export async function openFile(file: OpenedFile): Promise<boolean> {
     toast(msg);
     return false;
   }
-  emit('opened');
-  emit('state');
+  let editable = false;
   try {
     await assertEditable(file.data);
-    doc.editable = true;
+    editable = true;
   } catch (err) {
     toast(err instanceof EditError ? err.message : 'This PDF cannot be edited.', 'info');
   }
-  emit('state');
+  const tab: Tab = {
+    id: `tab-${++tabSeq}`,
+    file: { path: file.path, name: file.name },
+    bytes: file.data,
+    savedBytes: file.data,
+    undo: [],
+    redo: [],
+    current: 0,
+    editable,
+  };
+  tabs.push(tab);
+  await activate(tab);
   return true;
 }
 
@@ -202,7 +314,6 @@ export function setCurrent(index: number) {
 // ---------------------------------------------------------------- files
 
 export async function openDialog(): Promise<boolean> {
-  if (isDirty() && !(await confirmDiscard())) return false;
   try {
     const f = await api.openDialog();
     return f ? openFile(f) : false;
@@ -213,7 +324,6 @@ export async function openDialog(): Promise<boolean> {
 }
 
 export async function openPath(path: string): Promise<boolean> {
-  if (isDirty() && !(await confirmDiscard())) return false;
   try {
     return await openFile(await api.openPath(path));
   } catch (err) {
@@ -222,6 +332,7 @@ export async function openPath(path: string): Promise<boolean> {
   }
 }
 
+/** Asks whether to save the active document's changes; resolves true to continue. */
 let confirmDiscard: () => Promise<boolean> = async () => true;
 export const setDiscardConfirm = (fn: () => Promise<boolean>) => (confirmDiscard = fn);
 
