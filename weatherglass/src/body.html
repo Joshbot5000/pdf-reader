@@ -1,0 +1,83 @@
+<canvas id="sky" aria-label="Living landscape. Tap the sky to call lightning."></canvas>
+
+<div class="app" id="app">
+  <header class="top">
+    <div class="brand"><b>Weatherglass</b><span id="clock">—</span></div>
+    <div class="tools">
+      <button class="icon" id="btnSound" aria-pressed="false" title="Sound (M)" aria-label="Sound on or off">
+        <svg viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18V6L7.5 9.5H4z"/><path id="sndWaves" d="M15.5 9a4.2 4.2 0 0 1 0 6M18 6.5a7.8 7.8 0 0 1 0 11"/></svg>
+      </button>
+      <button class="icon" id="btnZen" title="Hide controls (H)" aria-label="Hide controls">
+        <svg viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg>
+      </button>
+      <button class="icon" id="btnFull" title="Full screen (F)" aria-label="Full screen">
+        <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="timer">
+      <div class="mode" id="mode">Focus</div>
+      <div class="digits" id="digits" aria-live="off"></div>
+      <div class="bar"><i id="bar"></i></div>
+      <div class="intent" id="intent"></div>
+      <div class="controls">
+        <button class="icon" id="btnReset" title="Reset" aria-label="Reset timer"><svg viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5"/><path d="M4.5 4.5v4h4"/></svg></button>
+        <button class="go" id="btnGo"><svg viewBox="0 0 24 24" id="goIcon"><path d="M7 4.5v15l12-7.5z"/></svg><span id="goText">Start focus</span></button>
+        <button class="icon" id="btnSkip" title="Skip" aria-label="Skip to next"><svg viewBox="0 0 24 24"><path d="M6 5.5v13l9-6.5zM18 5.5v13"/></svg></button>
+      </div>
+      <div class="lens" id="lens" role="group" aria-label="Focus length in minutes"></div>
+      <div class="hint" id="hint">tap the sky for lightning</div>
+    </div>
+  </main>
+
+  <aside class="side">
+    <section class="panel" id="panel" data-open="true">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-mix" data-tab="mix" aria-selected="true">Scene</button>
+        <button role="tab" id="tab-today" data-tab="today" aria-selected="false">Today <em id="tabCount"></em></button>
+        <button role="tab" id="tab-log" data-tab="log" aria-selected="false">Lanterns</button>
+      </div>
+      <div class="body" id="body">
+        <div class="pane" id="pane-mix">
+          <div class="group"><span class="label">Place</span><div class="chips" id="places"></div></div>
+          <div class="group"><span class="label">Weather</span><div class="chips" id="presets"></div></div>
+          <div class="mix" id="mix"></div>
+          <div>
+            <div class="skyhead"><span class="label">Sky</span><strong id="skyLabel">—</strong></div>
+            <input type="range" class="skyr" id="skyRange" min="0" max="1439" step="1" aria-label="Time of day">
+            <div class="row" style="margin-top:6px">
+              <button class="chip" id="btnLive" aria-pressed="true">Follow my clock</button>
+              <button class="chip" id="btnLapse" aria-pressed="false">Play a full day</button>
+            </div>
+          </div>
+        </div>
+        <div class="pane" id="pane-today" hidden>
+          <form class="add" id="addForm"><input id="addInput" placeholder="One thing for today…" autocomplete="off" maxlength="120" aria-label="New task"><button type="submit">Add</button></form>
+          <ul class="tasks" id="tasks"></ul>
+          <p class="note" id="exampleNote" hidden>These three are examples. <button class="chip" id="btnClearEx" style="height:24px;margin-left:4px">Clear them</button></p>
+          <p class="note">Tap “aim” to put a task under the timer.</p>
+        </div>
+        <div class="pane" id="pane-log" hidden>
+          <div class="stats">
+            <div><b id="stSessions">0</b><span class="label">today</span></div>
+            <div><b id="stMinutes">0</b><span class="label">minutes</span></div>
+            <div><b id="stStreak">0</b><span class="label">day streak</span></div>
+          </div>
+          <div><div class="label" style="margin-bottom:10px">Focus minutes, last 7 days</div><div class="week" id="week"></div></div>
+          <p class="note">Every focus session you finish lights a lantern. They drift over the water, or rise into the sky, until midnight.</p>
+          <div class="group">
+            <span class="label">Your data</span>
+            <p class="note"><span class="dot" id="syncDot"></span><span id="syncNote">Saved on this device.</span></p>
+            <div class="row"><button class="chip" id="btnExport">Copy transfer code</button><button class="chip" id="btnImport">Paste a code</button></div>
+            <textarea class="xfer" id="xfer" hidden aria-label="Transfer code" placeholder="Paste the code from your other device here"></textarea>
+            <button class="chip" id="btnLoad" hidden>Load this code</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </aside>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
