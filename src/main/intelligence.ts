@@ -1,12 +1,12 @@
 /** Everything the language model does: notes, chat about one conversation, questions across all of them. */
 import type { Library, VectorChunk } from './store';
 import { chunkForIndex, fmtTime, parseTime, roughTokens, transcriptForLLM } from '../shared/text';
-import { parseNameHints, parseSummary, partInstruction, summaryInstruction, summarySystem } from '../shared/summaryFormat';
+import { parseNameHints, parseSummary, summaryInstruction, summarySystem } from '../shared/summaryFormat';
 import { uid } from '../shared/types';
 import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId } from '../shared/types';
 
 export type LlmApi = {
-  generate(p: { streamId: string; system: string; history?: { role: 'user' | 'assistant'; text: string }[]; prompt: string; maxTokens?: number; temperature?: number }): Promise<string>;
+  generate(p: { streamId: string; system: string; history?: { role: 'user' | 'assistant'; text: string }[]; prompt: string; maxTokens?: number; temperature?: number; prefix?: string }): Promise<string>;
   tokens(text: string): Promise<number>;
   contextSize(): Promise<number>;
   modelName(): string;
@@ -68,27 +68,30 @@ export class Intelligence {
           const raw = await this.llm.generate({
             streamId: `${streamId}:part${i}`,
             system: summarySystem(tpl),
-            prompt: `This is part ${i + 1} of ${parts.length} of a longer transcript, covering ${fmtTime(from)} to ${fmtTime(to)}.\n\n${parts[i]}\n\n${partInstruction(tpl)}`,
-            maxTokens: 650,
+            prompt: `This is part ${i + 1} of ${parts.length} of a longer transcript, covering ${fmtTime(from)} to ${fmtTime(to)}.\n\n${parts[i]}\n\nWrite notes on THIS PART ONLY.\n\n${summaryInstruction(tpl)}`,
+            prefix: 'TITLE: ',
+            maxTokens: 750,
             temperature: 0.2,
           });
           if (this.stopped(streamId)) throw new Error('Stopped');
           const part = parseSummary(raw, tpl, m.summary);
           const seen = (list: string[], item: string) => list.some((x) => x.toLowerCase() === item.toLowerCase());
-          for (const k of part.keyPoints) if (!seen(merged.keyPoints, k)) merged.keyPoints.push(k);
+          for (const k of part.keyPoints.slice(0, 5)) if (!seen(merged.keyPoints, k)) merged.keyPoints.push(k);
           for (const d of part.decisions) if (!seen(merged.decisions, d)) merged.decisions.push(d);
           for (const q of part.questions) if (!seen(merged.questions, q)) merged.questions.push(q);
           for (const a of part.actions) if (!merged.actions.some((x) => x.text.toLowerCase() === a.text.toLowerCase())) merged.actions.push(a);
           // Only trust chapter times that fall inside the stretch this part covers.
-          merged.chapters.push(...part.chapters.filter((c) => c.t >= from - 5 && c.t <= to + 5).slice(0, 3));
+          const fresh = part.chapters.filter((c) => c.t >= from - 5 && c.t <= to + 5 && !merged.chapters.some((x) => x.title.toLowerCase() === c.title.toLowerCase()));
+          merged.chapters.push(...fresh.filter((c, j, all) => all.findIndex((x) => x.title.toLowerCase() === c.title.toLowerCase()) === j).slice(0, 3));
           merged.cards.push(...part.cards.slice(0, 3));
-          digest.push(`Part ${i + 1} (${fmtTime(from)} to ${fmtTime(to)}):\n${[...part.keyPoints, ...part.decisions.map((d) => `Decided: ${d}`)].map((x) => `- ${x}`).join('\n')}`);
+          digest.push(`Part ${i + 1} (${fmtTime(from)} to ${fmtTime(to)}): ${part.overview}\n${[...part.keyPoints.slice(0, 5), ...part.decisions.map((d) => `Decided: ${d}`)].map((x) => `- ${x}`).join('\n')}`);
         }
         this.send({ streamId, stage: 'Writing the summary' });
         const raw = await this.llm.generate({
           streamId,
           system: summarySystem(tpl),
           prompt: `These are notes on consecutive parts of one long conversation:\n\n${digest.join('\n\n')}\n\nWrite, in EXACTLY this format:\n\nTITLE: <specific title for the whole conversation, at most 8 words>\nOVERVIEW: <3-5 sentences covering the whole conversation from start to finish>\nKEY POINTS:\n- <the 6 to 10 most important points overall, one per line>\nTOPICS: <3-6 comma separated keywords>`,
+          prefix: 'TITLE: ',
           maxTokens: 700,
           temperature: 0.2,
         });
@@ -108,6 +111,7 @@ export class Intelligence {
             streamId,
             system: summarySystem(tpl),
             prompt: `${material}\n\n${summaryInstruction(tpl)}`,
+            prefix: 'TITLE: ',
             maxTokens: outTokens,
             temperature: attempt ? 0.5 : 0.2,
           });

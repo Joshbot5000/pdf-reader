@@ -21,7 +21,7 @@ const queued = <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 type Turn = { role: 'user' | 'assistant'; text: string };
-type GenParams = { streamId: string; system: string; history?: Turn[]; prompt: string; maxTokens?: number; temperature?: number };
+type GenParams = { streamId: string; system: string; history?: Turn[]; prompt: string; maxTokens?: number; temperature?: number; prefix?: string };
 
 async function unload(): Promise<void> {
   await context?.dispose?.().catch(() => undefined);
@@ -69,11 +69,14 @@ serve({
           maxTokens: p.maxTokens ?? 1024,
           temperature: p.temperature ?? 0.3,
           budgets: { thoughtTokens: 0 },
+          // Start the reply for the model, so it continues in the expected format.
+          ...(p.prefix ? { responsePrefix: p.prefix } : {}),
           signal: abort.signal,
           stopOnAbortSignal: true,
           onTextChunk: (delta: string) => emit('chunk', { streamId: p.streamId, delta }),
         });
-        return text.trim();
+        const out = text.trim();
+        return p.prefix && !out.startsWith(p.prefix.trim()) ? p.prefix + out : out;
       } finally {
         aborts.delete(p.streamId);
         session.dispose();

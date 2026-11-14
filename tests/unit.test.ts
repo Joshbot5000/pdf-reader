@@ -145,6 +145,12 @@ FLASHCARDS:
     expect(parseSummary(raw, 'meeting', done).actions[0].done).toBe(true);
     expect(parseSummary('', 'meeting').overview).toBe('');
   });
+  it('accepts headings written as nested markdown bullets', () => {
+    const s = parseSummary('- **Project Falcon**\n  - **Action Items**:\n    - Amara: Send the plan (due: Friday)\n  - **Decisions**:\n    - Budget approved: 12,000 pounds.\n  - **Key Points**:\n    - [0:11] Interviews done.', 'meeting');
+    expect(s.actions.map((a) => a.owner)).toEqual(['Amara']);
+    expect(s.decisions).toEqual(['Budget approved: 12,000 pounds.']);
+    expect(s.keyPoints).toHaveLength(1);
+  });
   it('parses actions and name hints defensively', () => {
     expect(parseAction('- none')).toBeNull();
     expect(parseAction('1. Unassigned: Book the room (due: TBD)')!.owner).toBeUndefined();

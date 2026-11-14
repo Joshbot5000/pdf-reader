@@ -64,28 +64,6 @@ TOPICS: <3-6 comma separated keywords>${cards}
 Action items are ${tp.actionLabel}. Chapters use the timestamps from the transcript, in order, 3 to 8 of them.${t === 'lecture' ? ' Write 5 to 10 flashcards.' : ''}`;
 }
 
-/** Instruction for one part of a long conversation: the same sections, minus the ones written once at the end. */
-export function partInstruction(t: TemplateId): string {
-  const tp = TEMPLATES[t];
-  const cards = t === 'lecture' ? '\nFLASHCARDS:\n- Q: <question testing one key idea> | A: <short answer>' : '';
-  return `${tp.focus}
-
-Write notes on THIS PART ONLY, in EXACTLY this format. Keep every heading. One item per line starting with "- ". Write "- none" under a heading with nothing to report. Keep every name, number and date.
-
-KEY POINTS:
-- <point>
-ACTION ITEMS:
-- <owner name>: <task> (due: <when, or unspecified>)
-DECISIONS:
-- <decision>
-OPEN QUESTIONS:
-- <question>
-CHAPTERS:
-- [m:ss] <topic title>: <one sentence>${cards}
-
-Action items are ${tp.actionLabel}. Give 1 to 3 chapters, each with the transcript timestamp where that topic starts.${t === 'lecture' ? ' Write 2 or 3 flashcards.' : ''}`;
-}
-
 const HEADS: [RegExp, keyof Sections][] = [
   [/^title$/i, 'title'],
   [/^(overview|summary|tl;?dr)$/i, 'overview'],
@@ -150,14 +128,14 @@ export function parseSummary(raw: string, template: TemplateId, prev?: Summary):
   for (const lineRaw of raw.replace(/<think>[\s\S]*?(<\/think>|$)/g, '').split(/\r?\n/)) {
     const line = lineRaw.trim();
     if (!line) continue;
-    const h = line.match(/^[#*\s]*([A-Za-z;?' -]{3,22}?)[*\s]*:[*\s]*(.*)$/);
+    const h = line.match(/^[#*\s•–-]*([A-Za-z;?' ]{3,22}?)[*\s]*:[*\s]*(.*)$/);
     const head = h && HEADS.find(([re]) => re.test(h[1].trim()));
     if (h && head) {
       cur = head[1];
       if (h[2].trim()) sec[cur].push(h[2].trim());
       continue;
     }
-    const bare = line.match(/^[#*\s]+([A-Za-z ]{3,22})[*\s]*$/);
+    const bare = line.match(/^[#*\s•–-]+([A-Za-z ]{3,22})[*\s]*$/);
     const bareHead = bare && HEADS.find(([re]) => re.test(bare[1].trim()));
     if (bareHead) {
       cur = bareHead[1];
