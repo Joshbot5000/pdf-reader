@@ -94,6 +94,7 @@ npm install
 npm run dev          # run with hot reload
 npm test             # unit tests (pause detection, speaker clustering, parsers, exports)
 npm run test:e2e     # drives the real app: sample → notes → chat → search → live recording
+                     # (needs models already downloaded; point HARK_MODELS_DIR at them)
 npm run dist         # package for the current platform
 ```
 

@@ -1,12 +1,17 @@
 // Drives the real app end to end and saves screenshots. Usage: node tests/tour.mjs <outDir> [dark|light]
 import { _electron as electron } from 'playwright-core';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import ffmpeg from 'ffmpeg-static';
 const out = path.resolve(process.argv[2] ?? 'scratch/shots'); const theme = process.argv[3] ?? 'dark';
 fs.mkdirSync(out, { recursive: true });
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hark-tour-'));
+// The bundled sample doubles as the fake microphone for the live-recording leg.
+const mic = path.join(data, 'mic.wav');
+execFileSync(ffmpeg, ['-loglevel', 'error', '-y', '-i', 'resources/sample-meeting.ogg', '-ar', '48000', '-ac', '1', mic]);
 fs.writeFileSync(path.join(data, 'settings.json'), JSON.stringify({ asrModel: process.env.HARK_ASR ?? 'whisper-base', llmModel: process.env.HARK_LLM ?? 'qwen-2b', theme }));
 const app = await electron.launch({
-  args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${path.resolve('scratch/mic48.wav')}%noloop`, '.'],
+  args: ['--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${mic}%noloop`, '.'],
   env: { ...process.env, HARK_DATA_DIR: data },
 });
 const errors = [];
