@@ -1,5 +1,5 @@
 /** Everything the window can ask the main process to do. */
-import type { ChatMsg, DownloadState, EngineStatus, LiveEvent, Meeting, ModelInfo, Para, SearchHit, Settings, StreamEvent, Summary, TemplateId, Voice } from './types';
+import type { ChatMsg, DownloadState, EngineStatus, LiveEvent, Meeting, ModelInfo, Para, PhoneInfo, SearchHit, Settings, StreamEvent, Summary, TemplateId, Voice } from './types';
 
 export type Api = {
   boot(): Promise<{ settings: Settings; meetings: Meeting[]; models: ModelInfo[]; status: EngineStatus; downloads: DownloadState[]; platform: string; version: string; ask: ChatMsg[] }>;
@@ -45,6 +45,7 @@ export type Api = {
   deleteVoice(id: string): Promise<Voice[]>;
   openDataFolder(): Promise<void>;
   micAccess(): Promise<boolean>;
+  phoneInfo(): Promise<PhoneInfo>;
 };
 
 export type Events = {

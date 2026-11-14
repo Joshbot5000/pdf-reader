@@ -11,9 +11,11 @@ import { TranscriptionSession, type SpeechApi } from './pipeline';
 import { Intelligence } from './intelligence';
 import { normalize } from '../shared/speakers';
 import { retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
+import QRCode from 'qrcode';
+import { lanAddresses, servePhone, type PhoneServer, type UploadMeta } from './phone';
 import { uid } from '../shared/types';
 import type { Api, Events } from '../shared/api';
-import type { EngineStatus, Meeting, Para, Voice } from '../shared/types';
+import type { EngineStatus, Meeting, Para, PhoneInfo, Voice } from '../shared/types';
 
 const dataDir = process.env.HARK_DATA_DIR || path.join(app.getPath('userData'), 'library');
 const modelsDir = process.env.HARK_MODELS_DIR || path.join(app.getPath('userData'), 'models');
@@ -23,8 +25,12 @@ const ffmpeg = (ffmpegStatic as unknown as string | null)?.replace('app.asar', '
 protocol.registerSchemesAsPrivileged([{ scheme: 'hark-media', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
 
 let win: BrowserWindow | null = null;
+let phone: PhoneServer | null = null;
+let phoneError = '';
+const PHONE_EVENTS = new Set<string>(['meeting', 'meetingDeleted', 'live', 'stream', 'status']);
 const send = <K extends keyof Events>(event: K, data: Events[K]): void => {
   if (win && !win.isDestroyed()) win.webContents.send(`hark:${event}`, data);
+  if (phone && PHONE_EVENTS.has(event)) phone.broadcast(event, data);
 };
 
 const lib = new Library(dataDir);
@@ -283,6 +289,19 @@ async function afterTranscript(id: string): Promise<void> {
   }
 }
 
+/** Bookmarks made while recording become highlights on the paragraph being spoken. */
+function applyBookmarks(id: string): void {
+  const cur = lib.has(id) ? lib.get(id) : null;
+  if (!cur?.bookmarks.length) return;
+  const paras = lib.transcript(id);
+  for (const t of cur.bookmarks) {
+    const p = paras.find((x) => t >= x.s - 0.5 && t <= x.e + 2) ?? [...paras].reverse().find((x) => x.s <= t);
+    if (p) p.hl = true;
+  }
+  lib.saveTranscript(id, paras);
+  send('live', { type: 'paras', meetingId: id, paras, speakers: cur.speakers, duration: cur.duration, replace: true });
+}
+
 let importChain: Promise<void> = Promise.resolve();
 
 async function runImport(m: Meeting, file: string): Promise<void> {
@@ -334,6 +353,86 @@ function queueImport(file: string, source: 'import' | 'sample', title?: string):
       : undefined,
   );
   return m;
+}
+
+// ---------------------------------------------------------------- phone
+
+/** A recording sent from the phone: transcribe it like an import, but treat it as the user's own recording. */
+function queuePhone(file: string, meta: UploadMeta): Meeting {
+  const createdAt = Math.min(meta.createdAt, Date.now());
+  const init = { createdAt } as Meeting;
+  const m = lib.create({
+    source: 'phone', status: 'processing', progress: 0, createdAt, template: meta.template, bookmarks: meta.bookmarks,
+    title: meta.name?.replace(/\.[^.]+$/, '') || defaultTitle(init), titleAuto: true,
+  });
+  importChain = importChain.then(async () => {
+    try {
+      if (lib.has(m.id)) await runImport(m, file);
+      applyBookmarks(m.id);
+      fs.rmSync(file, { force: true });
+    } catch (err) {
+      // Keep the upload on disk if transcription failed, so nothing recorded is ever lost.
+      if (lib.has(m.id)) lib.update(m.id, { status: 'error', progress: undefined, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+  return m;
+}
+
+const phoneAudioJobs = new Map<string, Promise<string | null>>();
+/** Phones cannot all play the library's WebM audio, so they get an AAC copy, made once and kept. */
+function phoneAudio(id: string): Promise<string | null> {
+  if (!lib.has(id) || !fs.existsSync(lib.audioPath(id))) return Promise.resolve(null);
+  const out = path.join(lib.folder(id), 'audio.phone.m4a');
+  if (fs.existsSync(out) && fs.statSync(out).mtimeMs >= fs.statSync(lib.audioPath(id)).mtimeMs) return Promise.resolve(out);
+  let job = phoneAudioJobs.get(id);
+  if (!job) {
+    const tmp = `${out}.tmp.m4a`;
+    job = runFfmpeg(['-y', '-i', lib.audioPath(id), '-vn', '-ac', '1', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', tmp])
+      .then((r) => {
+        if (r.code !== 0) return null;
+        fs.renameSync(tmp, out);
+        return out;
+      })
+      .finally(() => phoneAudioJobs.delete(id));
+    phoneAudioJobs.set(id, job);
+  }
+  return job;
+}
+
+const PHONE_PORT = Number(process.env.HARK_PHONE_PORT) || 7718;
+
+async function startPhone(): Promise<void> {
+  if (phone || !lib.settings().phone) return;
+  phoneError = '';
+  try {
+    phone = await servePhone(
+      {
+        dataDir,
+        uiDir: path.join(__dirname, '../phone'),
+        hasMeeting: (id) => lib.has(id),
+        audioFile: phoneAudio,
+        upload: queuePhone,
+        api: {
+          boot: async () => ({
+            meetings: lib.list(), status: { ...status }, ask: lib.askHistory(), version: app.getVersion(),
+            userName: lib.settings().userName, theme: lib.settings().theme, notes: models.installed(lib.settings().llmModel),
+          }),
+          getTranscript: api.getTranscript, updateMeeting: api.updateMeeting, deleteMeeting: api.deleteMeeting, updatePara: api.updatePara,
+          renameSpeaker: api.renameSpeaker, dismissHint: api.dismissHint, setSummary: api.setSummary, summarize: api.summarize,
+          chat: api.chat, clearChat: api.clearChat, ask: api.ask, clearAsk: api.clearAsk, abort: api.abort, search: api.search,
+        },
+      },
+      PHONE_PORT,
+    );
+  } catch (err) {
+    phone = null;
+    phoneError = (err as NodeJS.ErrnoException).code === 'EADDRINUSE' ? `Port ${PHONE_PORT} is being used by another app.` : String((err as Error).message);
+  }
+}
+
+function stopPhone(): void {
+  phone?.close();
+  phone = null;
 }
 
 // ---------------------------------------------------------------- API
@@ -460,17 +559,7 @@ const api: Api = {
     });
     void finish(m, l.session, audio).finally(() => {
       live.delete(id);
-      // Bookmarks made while recording become highlights on the paragraph being spoken.
-      const cur = lib.has(id) ? lib.get(id) : null;
-      if (cur?.bookmarks.length) {
-        const paras = lib.transcript(id);
-        for (const t of cur.bookmarks) {
-          const p = paras.find((x) => t >= x.s - 0.5 && t <= x.e + 2) ?? [...paras].reverse().find((x) => x.s <= t);
-          if (p) p.hl = true;
-        }
-        lib.saveTranscript(id, paras);
-        send('live', { type: 'paras', meetingId: id, paras, speakers: cur.speakers, duration: cur.duration, replace: true });
-      }
+      applyBookmarks(id);
     });
     return lib.get(id);
   },
@@ -533,6 +622,10 @@ const api: Api = {
     const before = lib.settings();
     const s = lib.saveSettings(patch);
     if (patch.theme) nativeTheme.themeSource = s.theme;
+    if (patch.phone !== undefined) {
+      if (s.phone) await startPhone();
+      else stopPhone();
+    }
     if (patch.asrModel && patch.asrModel !== before.asrModel) void warmSpeech();
     if (patch.llmModel && patch.llmModel !== before.llmModel) {
       if (llm.running) void llm.call('unload').catch(() => undefined);
@@ -564,6 +657,18 @@ const api: Api = {
     if (process.platform !== 'darwin') return true;
     if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true;
     return systemPreferences.askForMediaAccess('microphone');
+  },
+  phoneInfo: async () => {
+    const s = lib.settings();
+    const lan = lanAddresses();
+    const port = phone?.port ?? PHONE_PORT;
+    const link = s.phoneLink.trim().replace(/\/+$/, '');
+    const secure = /^https:\/\/[^\s/]+/.test(link);
+    const base = secure ? link : lan[0] ? `http://${lan[0]}:${port}` : '';
+    const url = phone && base ? `${base}/?k=${phone.token}` : '';
+    const info: PhoneInfo = { enabled: s.phone, running: !!phone, port, lan, url, secure, connected: phone?.clients() ?? 0, qr: '', error: phoneError || undefined };
+    if (url) info.qr = await QRCode.toDataURL(url, { margin: 1, width: 440, color: { dark: '#0a0b10ff', light: '#ffffffff' } });
+    return info;
   },
 };
 
@@ -670,6 +775,7 @@ else {
     buildMenu();
     createWindow();
     refreshStatus();
+    void startPhone();
     // Load the speech model right away so the first recording starts instantly; the language model shortly after.
     void warmSpeech();
     setTimeout(() => void ensureLlm().catch(() => undefined), 2500);
@@ -687,6 +793,7 @@ else {
       lib.saveTranscript(id, l.session.paras);
       lib.update(id, { speakers: l.session.speakers, duration: l.session.duration });
     }
+    stopPhone();
     speech.stop();
     llm.stop();
   });

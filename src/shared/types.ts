@@ -48,7 +48,7 @@ export type Meeting = {
   titleAuto: boolean;
   createdAt: number;
   duration: number;
-  source: 'mic' | 'import' | 'sample';
+  source: 'mic' | 'import' | 'sample' | 'phone';
   status: MeetingStatus;
   progress?: number;
   error?: string;
@@ -82,6 +82,10 @@ export type Settings = {
   onboarded: boolean;
   folders: string[];
   userName: string;
+  /** Let a paired phone reach this library over the local network. */
+  phone: boolean;
+  /** Optional secure (https) address for the phone, e.g. from Tailscale. */
+  phoneLink: string;
 };
 
 export type ModelKind = 'asr' | 'llm' | 'support';
@@ -115,6 +119,8 @@ export type LiveEvent =
 
 export type StreamEvent = { streamId: string; delta?: string; done?: boolean; error?: string; sources?: Source[]; stage?: string };
 
+export type PhoneInfo = { enabled: boolean; running: boolean; port: number; lan: string[]; url: string; qr: string; secure: boolean; connected: number; error?: string };
+
 export const SPEAKER_COLORS = 8;
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -127,6 +133,8 @@ export const DEFAULT_SETTINGS: Settings = {
   onboarded: false,
   folders: [],
   userName: '',
+  phone: true,
+  phoneLink: '',
 };
 
 export const LANGUAGES: [string, string][] = [

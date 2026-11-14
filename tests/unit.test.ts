@@ -198,3 +198,57 @@ describe('text utilities', () => {
     expect(chunks[chunks.length - 1].e).toBe(299);
   });
 });
+
+describe('phone link', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { servePhone } = await import('../src/main/phone');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hark-phone-unit-'));
+  const ui = path.join(dir, 'ui');
+  fs.mkdirSync(ui);
+  fs.writeFileSync(path.join(ui, 'index.html'), '<p>phone</p>');
+  const audio = path.join(dir, 'a.m4a');
+  fs.writeFileSync(audio, Buffer.from('0123456789'));
+  const uploads: { file: string; meta: { rid: string; bookmarks: number[]; template: string } }[] = [];
+  const server = await servePhone(
+    { dataDir: dir, uiDir: ui, hasMeeting: (id) => id === 'm1', audioFile: async (id) => (id === 'm1' ? audio : null), upload: (file, meta) => (uploads.push({ file, meta }), { id: 'm1' } as Meeting), api: { echo: (x: unknown) => x } },
+    0,
+  );
+  const base = `http://127.0.0.1:${server.port}`;
+  const k = `k=${server.token}`;
+  it('serves the app but guards the library', async () => {
+    expect(await (await fetch(base + '/')).text()).toBe('<p>phone</p>');
+    expect((await fetch(`${base}/audio/m1`)).status).toBe(401);
+    expect((await fetch(`${base}/audio/m1?k=wrong`)).status).toBe(401);
+    expect((await fetch(`${base}/upload?rid=a1`, { method: 'POST', body: 'x' })).status).toBe(401);
+    expect((await fetch(`${base}/../../etc/passwd`)).status).toBe(200); // falls back to the app, never outside it
+    expect(await (await fetch(`${base}/..%2F..%2Fphone.json`)).text()).toBe('<p>phone</p>');
+  });
+  it('plays audio with range requests', async () => {
+    const r = await fetch(`${base}/audio/m1?${k}`, { headers: { range: 'bytes=2-5' } });
+    expect(r.status).toBe(206);
+    expect(await r.text()).toBe('2345');
+    expect((await fetch(`${base}/audio/nope?${k}`)).status).toBe(404);
+  });
+  it('receives a recording once, even if the phone retries', async () => {
+    const send = () => fetch(`${base}/upload?${k}&rid=rec1&t=1700000000000&tpl=lecture&ext=m4a&marks=1.5,9`, { method: 'POST', body: Buffer.from('audio-bytes') });
+    expect(await (await send()).json()).toEqual({ meetingId: 'm1' });
+    expect(await (await send()).json()).toEqual({ meetingId: 'm1', duplicate: true });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0].meta).toMatchObject({ rid: 'rec1', template: 'lecture', bookmarks: [1.5, 9], createdAt: 1700000000000 });
+    expect(fs.readFileSync(uploads[0].file, 'utf8')).toBe('audio-bytes');
+  });
+  it('only runs calls on the allowed list', async () => {
+    const { WebSocket } = await import('ws');
+    await expect(new Promise((res, rej) => { const w = new WebSocket(`${base.replace('http', 'ws')}/ws?k=bad`); w.on('open', res); w.on('error', rej); })).rejects.toThrow();
+    const ws = new WebSocket(`${base.replace('http', 'ws')}/ws?${k}`);
+    await new Promise((r) => ws.on('open', r));
+    const ask = (msg: object) => new Promise<any>((r) => { ws.once('message', (d) => r(JSON.parse(String(d)))); ws.send(JSON.stringify(msg)); });
+    expect(await ask({ id: 1, method: 'echo', args: ['hi'] })).toEqual({ id: 1, result: 'hi' });
+    expect((await ask({ id: 2, method: 'constructor' })).error).toMatch(/Unknown/);
+    expect((await ask({ id: 3, method: 'deleteEverything' })).error).toMatch(/Unknown/);
+    ws.close();
+    server.close();
+  });
+});

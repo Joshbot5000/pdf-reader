@@ -33,7 +33,7 @@ export type State = {
   rec: RecState | null;
   toasts: Toast[];
   palette: boolean;
-  settingsOpen: false | 'general' | 'models' | 'voices';
+  settingsOpen: false | 'general' | 'models' | 'voices' | 'phone';
 };
 
 let state: State = {

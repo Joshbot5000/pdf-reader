@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Check, Cpu, Download, FolderOpen, Mic, Sparkles, Trash2, UserRound, X } from 'lucide-react';
+import { Check, Cpu, Download, FolderOpen, Mic, Smartphone, Sparkles, Trash2, UserRound, X } from 'lucide-react';
 import { api } from '../api';
 import { run, saveSettings, set, useStore } from '../store';
 import { Avatar, gb } from '../ui/bits';
 import { LANGUAGES } from '../../../shared/types';
-import type { ModelInfo, Voice } from '../../../shared/types';
+import type { ModelInfo, PhoneInfo, Voice } from '../../../shared/types';
 
 export function ModelCard({ m, selected, onUse }: { m: ModelInfo; selected: boolean; onUse?: () => void }) {
   const dl = useStore((s) => s.downloads[m.id]);
@@ -56,6 +56,7 @@ export function Settings() {
           <button className={tab === 'general' ? 'on' : ''} onClick={() => set({ settingsOpen: 'general' })}><Mic size={15} /> General</button>
           <button className={tab === 'models' ? 'on' : ''} onClick={() => set({ settingsOpen: 'models' })}><Cpu size={15} /> AI models</button>
           <button className={tab === 'voices' ? 'on' : ''} onClick={() => set({ settingsOpen: 'voices' })}><UserRound size={15} /> Voices</button>
+          <button className={tab === 'phone' ? 'on' : ''} onClick={() => set({ settingsOpen: 'phone' })}><Smartphone size={15} /> Phone</button>
           <span className="grow" />
           <p className="dim small">Hark {version}<br />{status.ramGb} GB memory{status.gpu ? ` · ${status.gpu === 'metal' ? 'Apple GPU' : status.gpu.toUpperCase()}` : ''}</p>
         </aside>
@@ -103,9 +104,63 @@ export function Settings() {
               ))}
             </>
           )}
+          {tab === 'phone' && <PhoneTab />}
         </section>
       </div>
     </div>
+  );
+}
+
+/** Pair a phone: it becomes a pocket recorder and a window onto this library. */
+function PhoneTab() {
+  const settings = useStore((s) => s.settings);
+  const [info, setInfo] = useState<PhoneInfo | null>(null);
+  const [link, setLink] = useState(settings.phoneLink);
+  useEffect(() => {
+    let alive = true;
+    const load = () => void api.phoneInfo().then((i) => alive && setInfo(i));
+    load();
+    const t = setInterval(load, 4000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [settings.phone, settings.phoneLink]);
+  const saveLink = (v: string) => {
+    setLink(v);
+    const clean = v.trim();
+    if (!clean || /^https:\/\/[^\s/]+/.test(clean)) void saveSettings({ phoneLink: clean });
+  };
+  return (
+    <>
+      <h3>Hark on your phone</h3>
+      <p className="lead">Record anywhere with your phone, then read the notes, play back and ask questions from it. The phone talks only to this computer: recordings are transcribed here and nothing goes to the cloud.</p>
+      <label className="field"><span>Allow a paired phone<i>Only a phone that has scanned your code can connect.</i></span><Toggle on={settings.phone} set={(v) => void saveSettings({ phone: v })} /></label>
+      {settings.phone && info && (
+        info.error ? <p className="err-text">The phone link could not start. {info.error}</p> : (
+          <>
+            <div className="pair">
+              <div className="qr">{info.qr ? <img src={info.qr} alt="Pairing code" /> : <span className="dim small">No network found. Is Wi-Fi on?</span>}</div>
+              <ol>
+                <li>Make sure your phone is on the same Wi-Fi as this computer.</li>
+                <li>Point the phone's camera at the code and open the link.</li>
+                <li>In Safari tap <b>Share → Add to Home Screen</b>. Hark now opens like any app.</li>
+                <li className="dim">{info.connected ? <span className="chip ok"><Check size={11} /> {info.connected === 1 ? 'A phone is connected' : `${info.connected} phones connected`}</span> : 'Waiting for a phone…'}</li>
+              </ol>
+            </div>
+            <h5><Mic size={13} /> Record from anywhere {info.secure && <span className="chip ok"><Check size={11} /> Secure link in use</span>}</h5>
+            <p className="lead">Phones only switch the microphone on for secure (https) addresses. On plain Wi-Fi the phone can browse your library and send voice memos; for one-tap recording, and to reach Hark when you are out, give it a secure link with Tailscale (free):</p>
+            <ol className="steps">
+              <li>Install <b>Tailscale</b> on this computer and on your phone, and sign in to both with the same account.</li>
+              <li>On this computer, open Terminal and run <code>tailscale serve --bg {info.port}</code></li>
+              <li>It prints an address starting with https. Paste it here, then scan the new code:</li>
+            </ol>
+            <input className="link-in" value={link} placeholder="https://your-mac.your-tailnet.ts.net" spellCheck={false} onChange={(e) => saveLink(e.target.value)} />
+            <p className="dim small">Keep the code private: anyone who scans it can open your library. This computer needs to be on and awake for the phone to reach it; recordings made while it is out of reach wait on the phone and arrive later.</p>
+          </>
+        )
+      )}
+    </>
   );
 }
 

@@ -25,6 +25,7 @@ It rebuilds the core of [Otter.ai](https://otter.ai) as a local desktop app.
 | **Insights** | Talk-time share, words per minute, turn-taking timeline |
 | **Export** | Markdown, PDF, plain text, subtitles (.srt), audio; copy notes or transcript |
 | **Organise** | Folders, stars, light and dark themes |
+| **Phone** | A phone app that records anywhere and sends the recording to your Mac to be transcribed, then shows the notes, plays the audio back and lets you chat and ask questions. See below |
 
 ## Installing on a Mac
 
@@ -40,6 +41,41 @@ To update later, download a fresh ZIP and run the installer again: your library
 and models are kept.
 
 The first time you record, macOS asks for microphone access.
+
+## Hark on your phone
+
+The phone app is a companion to Hark on your Mac, not a separate copy: the AI
+models are far too large for a phone browser, so the phone records and the Mac
+does the transcribing and note-writing. Nothing goes through the cloud.
+
+**Pairing (once):** open Hark on the Mac → **Settings → Phone** and scan the
+code with the phone's camera. In Safari tap **Share → Add to Home Screen** and
+Hark opens like any other app. If macOS asks whether Hark may accept incoming
+connections, allow it.
+
+**What the phone does**
+
+- **Record** with one tap: an audio-reactive orb, pause, flag a moment, pick the
+  note style. Audio is saved to the phone every few seconds as you go.
+- **Works when the Mac is out of reach:** the recording waits on the phone and
+  is sent automatically the next time the Mac can be reached.
+- **Add file:** send a voice memo or any audio/video file to Hark.
+- **Read and listen:** notes, action items (tick them off), chapters, the full
+  transcript with speakers; tap any paragraph to play from there.
+- **Chat** about one conversation, or **Ask** across everything.
+- **Search** every word, name speakers, rename, star, share, delete.
+
+**The microphone needs a secure link.** Phones only allow web apps to use the
+microphone over https. On plain home Wi-Fi the phone can do everything except
+one-tap recording (use *Add file* with a voice memo instead). For recording, and
+to reach Hark when you are away from home, Settings → Phone walks you through a
+free [Tailscale](https://tailscale.com) link: install it on both devices, run
+`tailscale serve --bg 7718` on the Mac, paste the https address it prints.
+
+Limits worth knowing: the Mac must be on and awake for the phone to see the
+library; while recording, keep Hark open with the screen on (phones pause web
+apps in the background); there is no live transcript on the phone, the
+transcript appears once the recording has been sent.
 
 ## How the AI is built in
 
@@ -79,7 +115,8 @@ model are the defaults on a 16 GB Mac; *Light* is chosen automatically on 8 GB.
   each other, or a very short interjection, can be attributed to the wrong person;
   click the name to fix it.
 - Otter features that need an online service are not included: a bot that joins
-  calls by itself, calendar sync, shared team workspaces, and mobile apps. To
+  calls by itself, calendar sync, shared team workspaces, and App Store apps
+  (the phone app is a home-screen web app that needs your Mac). To
   capture a call, record with **+ computer audio** or simply let the microphone
   hear your speakers.
 - "Computer audio" capture depends on macOS screen-and-audio recording permission
@@ -95,6 +132,7 @@ npm run dev          # run with hot reload
 npm test             # unit tests (pause detection, speaker clustering, parsers, exports)
 npm run test:e2e     # drives the real app: sample → notes → chat → search → live recording
                      # (needs models already downloaded; point HARK_MODELS_DIR at them)
+npm run test:phone   # drives the phone app against the real desktop app (same model needs)
 npm run dist         # package for the current platform
 ```
 
