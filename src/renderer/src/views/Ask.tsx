@@ -6,7 +6,10 @@ import { Md, Spinner, dayLabel } from '../ui/bits';
 import { fmtTime } from '../../../shared/text';
 import type { ChatMsg, Source } from '../../../shared/types';
 
-export function Sources({ sources }: { sources?: Source[] }) {
+export function Sources({ sources, text }: { sources?: Source[]; text?: string }) {
+  // Once the answer is written, show only the moments it actually cites.
+  const cited = text ? sources?.filter((s) => text.includes(`[${s.n}]`)) : undefined;
+  if (cited?.length) sources = cited;
   if (!sources?.length) return null;
   return (
     <div className="sources">
@@ -55,7 +58,9 @@ export function Ask() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [msgs, stream?.text, pending]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: 'end' });
+  }, [msgs, stream?.text, pending]);
 
   const ideas = useMemo(() => {
     const topic = meetings.find((m) => m.summary?.topics.length)?.summary?.topics[0];
@@ -79,7 +84,7 @@ export function Ask() {
         )}
         {msgs.map((m) => (
           <div key={m.id} className={`msg ${m.role}`}>
-            {m.role === 'assistant' ? <><Md text={m.text} sources={m.sources} onSource={openSource} /><Sources sources={m.sources} /></> : m.text}
+            {m.role === 'assistant' ? <><Md text={m.text} sources={m.sources} onSource={openSource} /><Sources sources={m.sources} text={m.text} /></> : m.text}
           </div>
         ))}
         {pending && (

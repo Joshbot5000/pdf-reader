@@ -26,6 +26,6 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     plugins: [react()],
-    build: { target: 'chrome140', rollupOptions: { input: resolve(__dirname, 'src/renderer/index.html') } },
+    build: { target: 'chrome140', minify: !process.env.HARK_NOMINIFY, rollupOptions: { input: resolve(__dirname, 'src/renderer/index.html') } },
   },
 });

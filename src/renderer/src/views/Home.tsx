@@ -68,7 +68,7 @@ export function Home() {
           <h1>{folder ?? (starred ? 'Starred' : hello)}</h1>
         </div>
         <div className="stats">
-          <div><b>{stats.hours < 10 ? stats.hours.toFixed(1) : Math.round(stats.hours)}</b><span>hours kept</span></div>
+          <div><b>{stats.hours < 1 ? Math.round(stats.hours * 60) : stats.hours < 10 ? stats.hours.toFixed(1) : Math.round(stats.hours)}</b><span>{stats.hours < 1 ? 'minutes kept' : 'hours kept'}</span></div>
           <div><b>{stats.words > 9999 ? `${Math.round(stats.words / 1000)}k` : stats.words.toLocaleString()}</b><span>words searchable</span></div>
           <div className="link" onClick={() => go({ name: 'tasks' })}><b>{stats.open}</b><span>open actions</span></div>
         </div>

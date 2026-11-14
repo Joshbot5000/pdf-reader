@@ -1,7 +1,7 @@
 /** Everything the language model does: notes, chat about one conversation, questions across all of them. */
 import type { Library, VectorChunk } from './store';
-import { chunkForIndex, fmtTime, roughTokens, transcriptForLLM } from '../shared/text';
-import { parseNameHints, parseSummary, summaryInstruction, summarySystem } from '../shared/summaryFormat';
+import { chunkForIndex, fmtTime, parseTime, roughTokens, transcriptForLLM } from '../shared/text';
+import { parseNameHints, parseSummary, partInstruction, summaryInstruction, summarySystem } from '../shared/summaryFormat';
 import { uid } from '../shared/types';
 import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId } from '../shared/types';
 
@@ -50,43 +50,87 @@ export class Intelligence {
     try {
       const ctx = await this.llm.contextSize();
       const outTokens = tpl === 'lecture' ? 1500 : 1100;
-      const budget = ctx - outTokens - 700;
       const transcript = transcriptForLLM(paras, m.speakers);
-      let material = `Transcript:\n${transcript}`;
-      const parts = await this.split(transcript, budget);
+      // Small models lose the middle of very long inputs, so anything beyond about 20 minutes
+      // of speech is read in parts of roughly 15 minutes each.
+      const single = Math.min(ctx - outTokens - 700, 4500);
+      const parts = (await this.llm.tokens(transcript)) <= single ? [transcript] : await this.split(transcript, Math.min(single, 3500));
+      const material = `Transcript:\n${transcript}`;
+      let summary: Summary | null = null;
+
       if (parts.length > 1) {
-        // Long conversation: take notes on each part, then write the summary from the notes.
-        const notes: string[] = [];
-        const perPart = Math.max(250, Math.min(700, Math.floor((budget - 200) / parts.length)));
+        const merged = parseSummary('', tpl, m.summary);
+        const digest: string[] = [];
         for (let i = 0; i < parts.length; i++) {
           this.send({ streamId, stage: `Reading part ${i + 1} of ${parts.length}` });
-          notes.push(
-            await this.llm.generate({
-              streamId: `${streamId}:part${i}`,
-              system: summarySystem(tpl),
-              prompt: `This is part ${i + 1} of ${parts.length} of a longer transcript.\n\n${parts[i]}\n\nWrite detailed notes on this part as bullet points. Keep the [m:ss] timestamp of each topic, every name, number and date, every decision, and every task with its owner. Bullets only, no preamble.`,
-              maxTokens: perPart,
-              temperature: 0.2,
-            }),
-          );
+          const times = [...parts[i].matchAll(/^\[(\d+(?::\d+)+)\]/gm)].map((x) => x[1]);
+          const from = parseTime(times[0] ?? '0:00') ?? 0, to = parseTime(times[times.length - 1] ?? '0:00') ?? m.duration;
+          const raw = await this.llm.generate({
+            streamId: `${streamId}:part${i}`,
+            system: summarySystem(tpl),
+            prompt: `This is part ${i + 1} of ${parts.length} of a longer transcript, covering ${fmtTime(from)} to ${fmtTime(to)}.\n\n${parts[i]}\n\n${partInstruction(tpl)}`,
+            maxTokens: 650,
+            temperature: 0.2,
+          });
           if (this.stopped(streamId)) throw new Error('Stopped');
+          const part = parseSummary(raw, tpl, m.summary);
+          const seen = (list: string[], item: string) => list.some((x) => x.toLowerCase() === item.toLowerCase());
+          for (const k of part.keyPoints) if (!seen(merged.keyPoints, k)) merged.keyPoints.push(k);
+          for (const d of part.decisions) if (!seen(merged.decisions, d)) merged.decisions.push(d);
+          for (const q of part.questions) if (!seen(merged.questions, q)) merged.questions.push(q);
+          for (const a of part.actions) if (!merged.actions.some((x) => x.text.toLowerCase() === a.text.toLowerCase())) merged.actions.push(a);
+          // Only trust chapter times that fall inside the stretch this part covers.
+          merged.chapters.push(...part.chapters.filter((c) => c.t >= from - 5 && c.t <= to + 5).slice(0, 3));
+          merged.cards.push(...part.cards.slice(0, 3));
+          digest.push(`Part ${i + 1} (${fmtTime(from)} to ${fmtTime(to)}):\n${[...part.keyPoints, ...part.decisions.map((d) => `Decided: ${d}`)].map((x) => `- ${x}`).join('\n')}`);
         }
-        material = `Notes taken on consecutive parts of one long conversation:\n\n${notes.map((n, i) => `Part ${i + 1}:\n${n}`).join('\n\n')}`;
         this.send({ streamId, stage: 'Writing the summary' });
-      }
-      let summary: Summary | null = null;
-      for (let attempt = 0; attempt < 2 && !summary; attempt++) {
         const raw = await this.llm.generate({
           streamId,
           system: summarySystem(tpl),
-          prompt: `${material}\n\n${summaryInstruction(tpl)}`,
-          maxTokens: outTokens,
-          temperature: attempt ? 0.5 : 0.2,
+          prompt: `These are notes on consecutive parts of one long conversation:\n\n${digest.join('\n\n')}\n\nWrite, in EXACTLY this format:\n\nTITLE: <specific title for the whole conversation, at most 8 words>\nOVERVIEW: <3-5 sentences covering the whole conversation from start to finish>\nKEY POINTS:\n- <the 6 to 10 most important points overall, one per line>\nTOPICS: <3-6 comma separated keywords>`,
+          maxTokens: 700,
+          temperature: 0.2,
         });
         if (this.stopped(streamId)) throw new Error('Stopped');
-        const s = parseSummary(raw, tpl, m.summary);
-        if (s.overview || s.keyPoints.length) summary = s;
-        else this.send({ streamId, stage: 'Trying again' });
+        const top = parseSummary(raw, tpl);
+        merged.title = top.title;
+        merged.overview = top.overview;
+        merged.topics = top.topics;
+        if (top.keyPoints.length >= 3) merged.keyPoints = top.keyPoints;
+        else merged.keyPoints = merged.keyPoints.slice(0, 12);
+        merged.chapters.sort((x, y) => x.t - y.t);
+        merged.cards = merged.cards.slice(0, 12);
+        if (merged.overview || merged.keyPoints.length) summary = merged;
+      } else {
+        for (let attempt = 0; attempt < 2 && !summary; attempt++) {
+          const raw = await this.llm.generate({
+            streamId,
+            system: summarySystem(tpl),
+            prompt: `${material}\n\n${summaryInstruction(tpl)}`,
+            maxTokens: outTokens,
+            temperature: attempt ? 0.5 : 0.2,
+          });
+          if (this.stopped(streamId)) throw new Error('Stopped');
+          const s = parseSummary(raw, tpl, m.summary);
+          if (s.overview || s.keyPoints.length) summary = s;
+          else this.send({ streamId, stage: 'Trying again' });
+        }
+        if (summary && !summary.actions.length && !summary.decisions.length && !this.stopped(streamId)) {
+          // Small models sometimes skip these sections. Ask once more, just for them.
+          const raw = await this.llm
+            .generate({
+              streamId: `${streamId}:tasks`,
+              system: summarySystem(tpl),
+              prompt: `${material}\n\nList only the action items and decisions from this conversation, in EXACTLY this format. Write "- none" if there are none.\n\nACTION ITEMS:\n- <owner name>: <task> (due: <when, or unspecified>)\nDECISIONS:\n- <decision>`,
+              maxTokens: 400,
+              temperature: 0.1,
+            })
+            .catch(() => '');
+          const extra = parseSummary(raw, tpl, m.summary);
+          summary.actions = extra.actions;
+          summary.decisions = extra.decisions;
+        }
       }
       if (!summary) throw new Error('The model did not produce usable notes. Try again, or switch to a larger AI model in Settings.');
       summary.chapters = summary.chapters.filter((c) => c.t <= m.duration + 5);
@@ -96,7 +140,7 @@ export class Intelligence {
       if (m.titleAuto && summary.title) patch.title = summary.title;
       this.lib.update(meetingId, patch);
       this.send({ streamId, done: true });
-      if (parts.length === 1) await this.suggestNames(meetingId, material, tpl).catch(() => undefined);
+      await this.suggestNames(meetingId, parts.length === 1 ? material : `Transcript (the beginning of a longer conversation):\n${parts[0]}`, tpl).catch(() => undefined);
       void this.index(meetingId).catch(() => undefined);
       return summary;
     } catch (err) {

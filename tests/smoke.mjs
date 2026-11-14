@@ -2,7 +2,7 @@
 import { _electron as electron } from 'playwright-core';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hark-smoke-'));
-const app = await electron.launch({ args: ['--no-sandbox', '.'], env: { ...process.env, HARK_DATA_DIR: data, HARK_MODELS_DIR: process.env.HARK_MODELS_DIR } });
+const app = await electron.launch({ ...(process.env.HARK_EXE ? { executablePath: process.env.HARK_EXE, args: ['--no-sandbox'] } : { args: ['--no-sandbox', '.'] }), env: { ...process.env, HARK_DATA_DIR: data, HARK_MODELS_DIR: process.env.HARK_MODELS_DIR } });
 app.process().stderr.on('data', (d) => { const s = String(d); if (!/dbus|GLib|gpu|Gtk|libEGL|viz/i.test(s)) process.stderr.write('[electron] ' + s); });
 const page = await app.firstWindow();
 const call = (m, ...a) => page.evaluate(([m, a]) => window.hark.call(m, ...a), [m, a]);

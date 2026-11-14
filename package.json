@@ -12,22 +12,19 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "test:e2e": "npm run build && node tests/e2e.mjs",
+    "test": "vitest run tests/unit.test.ts",
+    "test:e2e": "npm run build && node tests/tour.mjs scratch/shots",
     "dist": "npm run build && electron-builder"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "ffmpeg-static": "^5.3.0",
+    "node-llama-cpp": "^3.22.3"
+  },
+  "devDependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
-    "@huggingface/transformers": "^4.3.2",
-    "ffmpeg-static": "^5.3.0",
-    "lucide-react": "^1.72.0",
-    "node-llama-cpp": "^3.22.3",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  },
-  "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -35,10 +32,46 @@
     "electron": "^45.3.2",
     "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
-    "kokoro-js": "^1.2.1",
+    "lucide-react": "^1.72.0",
     "playwright-core": "^1.65.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"
+  },
+  "build": {
+    "appId": "com.joshbot5000.hark",
+    "productName": "Hark",
+    "asar": false,
+    "npmRebuild": false,
+    "files": [
+      "out/**",
+      "resources/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "resources/icon.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Hark listens through the microphone to transcribe your conversations. Audio stays on this Mac.",
+        "NSAudioCaptureUsageDescription": "Hark can also capture what your Mac is playing (for example a video call) so it can be transcribed. Audio stays on this Mac."
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Office"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.png"
+    }
   }
 }

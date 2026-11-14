@@ -6,7 +6,6 @@
 import { api } from './api';
 import { get, go, set, toast } from './store';
 import type { TemplateId } from '../../shared/types';
-import workletUrl from './pcm-worklet.js?url';
 
 type Rig = {
   id: string;
@@ -69,7 +68,7 @@ export async function startRecording(template: TemplateId, withSystemAudio = fal
       src.connect(analyser);
     }
     const asr = new AudioContext({ sampleRate: 16000 });
-    await asr.audioWorklet.addModule(workletUrl);
+    await asr.audioWorklet.addModule(new URL('./pcm-worklet.js', document.baseURI).href);
     const tap = new AudioWorkletNode(asr, 'pcm-tap', { numberOfInputs: 1, numberOfOutputs: 0, channelCount: 1, channelCountMode: 'explicit' });
     asr.createMediaStreamSource(dest.stream).connect(tap);
 

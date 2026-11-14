@@ -44,10 +44,8 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
 
 /* ---------- atmosphere ---------- */
 .aurora { position: fixed; inset: -20%; z-index: 0; pointer-events: none; opacity: .55; filter: blur(90px) saturate(1.2);
-  background: radial-gradient(38% 34% at 18% 12%, rgba(124,104,255,.5), transparent 70%), radial-gradient(30% 30% at 88% 6%, rgba(255,110,170,.3), transparent 70%), radial-gradient(34% 36% at 70% 100%, rgba(63,217,196,.18), transparent 70%);
-  animation: drift 40s ease-in-out infinite alternate; }
+  background: radial-gradient(38% 34% at 18% 12%, rgba(124,104,255,.5), transparent 70%), radial-gradient(30% 30% at 88% 6%, rgba(255,110,170,.3), transparent 70%), radial-gradient(34% 36% at 70% 100%, rgba(63,217,196,.18), transparent 70%); }
 [data-theme='light'] .aurora { opacity: .5; }
-@keyframes drift { from { transform: translate3d(-2%, -1%, 0) rotate(0deg); } to { transform: translate3d(3%, 3%, 0) rotate(8deg); } }
 .grain { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .05; mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
 .splash { height: 100%; background: var(--bg); }
@@ -322,7 +320,7 @@ h5 .dim { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .ideas button { padding: 7px 13px; border-radius: 20px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; color: var(--text2); transition: all .15s; }
 .ideas button:hover { border-color: var(--accent); color: var(--text); transform: translateY(-1px); }
 .clear-chat { align-self: center; font-size: 12px; color: var(--text3); padding: 2px 8px; } .clear-chat:hover { color: var(--danger); }
-.composer { display: flex; align-items: flex-end; gap: 8px; margin: 8px 14px 14px; padding: 7px 7px 7px 14px; border-radius: 16px; border: 1px solid var(--line2); background: var(--solid); transition: border-color .15s, box-shadow .15s; }
+.composer { display: flex; align-items: flex-end; gap: 8px; margin: 8px 16px 16px; padding: 7px 7px 7px 14px; border-radius: 16px; border: 1px solid var(--line2); background: var(--solid); transition: border-color .15s, box-shadow .15s; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 14%, transparent); }
 .composer textarea { flex: 1; background: none; border: 0; resize: none; padding: 5px 0; max-height: 120px; field-sizing: content; user-select: text; }
 .my-notes { flex: 1; width: 100%; padding: 20px 22px; background: none; border: 0; resize: none; font-size: 14.5px; line-height: 1.65; user-select: text; }

@@ -33,7 +33,9 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
   const speakers = useMemo(() => (m ? (m.status === 'ready' ? m.speakers : liveSpeakers ?? m.speakers) : []), [m, liveSpeakers]);
 
   useEffect(() => void loadTranscript(id, true), [id, status]);
-  useEffect(() => setTitle(m?.title ?? ''), [m?.title]);
+  useEffect(() => {
+    setTitle(m?.title ?? '');
+  }, [m?.title]);
 
   const seek = useCallback<Seek>((t, play = true) => {
     const a = audio.current;
@@ -477,7 +479,9 @@ function ChatTab({ m, seek }: { m: Meeting; seek: Seek }) {
   const [q, setQ] = useState('');
   const [pending, setPending] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [m.chat.length, stream?.text, pending]);
+  useEffect(() => {
+    end.current?.scrollIntoView({ block: 'end' });
+  }, [m.chat.length, stream?.text, pending]);
   const send = async (text: string) => {
     text = text.trim();
     if (!text || pending) return;

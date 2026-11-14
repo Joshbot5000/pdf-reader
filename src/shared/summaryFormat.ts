@@ -64,6 +64,28 @@ TOPICS: <3-6 comma separated keywords>${cards}
 Action items are ${tp.actionLabel}. Chapters use the timestamps from the transcript, in order, 3 to 8 of them.${t === 'lecture' ? ' Write 5 to 10 flashcards.' : ''}`;
 }
 
+/** Instruction for one part of a long conversation: the same sections, minus the ones written once at the end. */
+export function partInstruction(t: TemplateId): string {
+  const tp = TEMPLATES[t];
+  const cards = t === 'lecture' ? '\nFLASHCARDS:\n- Q: <question testing one key idea> | A: <short answer>' : '';
+  return `${tp.focus}
+
+Write notes on THIS PART ONLY, in EXACTLY this format. Keep every heading. One item per line starting with "- ". Write "- none" under a heading with nothing to report. Keep every name, number and date.
+
+KEY POINTS:
+- <point>
+ACTION ITEMS:
+- <owner name>: <task> (due: <when, or unspecified>)
+DECISIONS:
+- <decision>
+OPEN QUESTIONS:
+- <question>
+CHAPTERS:
+- [m:ss] <topic title>: <one sentence>${cards}
+
+Action items are ${tp.actionLabel}. Give 1 to 3 chapters, each with the transcript timestamp where that topic starts.${t === 'lecture' ? ' Write 2 or 3 flashcards.' : ''}`;
+}
+
 const HEADS: [RegExp, keyof Sections][] = [
   [/^title$/i, 'title'],
   [/^(overview|summary|tl;?dr)$/i, 'overview'],
@@ -159,7 +181,7 @@ export function parseSummary(raw: string, template: TemplateId, prev?: Summary):
     actions,
     decisions: items('decisions'),
     questions: items('questions'),
-    chapters: sec.chapters.map(parseChapter).filter((c): c is Chapter => !!c).sort((a, b) => a.t - b.t),
+    chapters: sec.chapters.map(parseChapter).filter((c): c is Chapter => !!c).sort((a, b) => a.t - b.t).filter((c, i, all) => !i || c.t !== all[i - 1].t),
     topics: items('topics').join(',').split(/[,;]/).map((t) => t.trim().replace(/\.$/, '')).filter((t) => t && t.length < 40).slice(0, 8),
     cards: sec.cards.map(parseCard).filter((c): c is Flashcard => !!c),
     template,

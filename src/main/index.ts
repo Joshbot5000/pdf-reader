@@ -252,7 +252,7 @@ function newSession(m: Meeting, isLive: boolean): TranscriptionSession {
 
 const defaultTitle = (m: Meeting): string => {
   const d = new Date(m.createdAt);
-  const part = d.getHours() < 12 ? 'Morning' : d.getHours() < 17 ? 'Afternoon' : 'Evening';
+  const part = d.getHours() < 5 ? 'Late-night' : d.getHours() < 12 ? 'Morning' : d.getHours() < 17 ? 'Afternoon' : 'Evening';
   return `${part} conversation, ${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 };
 

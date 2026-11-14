@@ -264,8 +264,12 @@ function Palette() {
     }));
     return [...out, ...actions.filter((a) => a.key === 'ask' || a.title.toLowerCase().includes(low))];
   }, [q, hits, meetings]);
-  useEffect(() => setSel(0), [q, hits]);
-  useEffect(() => listRef.current?.querySelector('.on')?.scrollIntoView({ block: 'nearest' }), [sel]);
+  useEffect(() => {
+    setSel(0);
+  }, [q, hits]);
+  useEffect(() => {
+    listRef.current?.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+  }, [sel]);
   const pick = (it?: Item) => {
     if (!it) return;
     set({ palette: false });

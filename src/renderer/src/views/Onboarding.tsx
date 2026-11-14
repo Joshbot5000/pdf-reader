@@ -28,7 +28,7 @@ export function Onboarding() {
     for (const id of [asr, 'speaker', 'embed', llm]) if (!info(id)?.installed) void api.downloadModel(id);
   };
   const finish = async (sample: boolean) => {
-    await saveSettings({ onboarded: true });
+    await saveSettings({ onboarded: true, userName: name.trim() });
     if (sample) {
       const m = await run(api.importSample());
       if (m) go({ name: 'meeting', id: m.id });
