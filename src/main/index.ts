@@ -199,13 +199,34 @@ const speechApi: SpeechApi = {
   embedSpeaker: (pcm) => speech.call('embedSpeaker', { pcm }),
 };
 
+// On a Mac with little memory, the language model is only held while it is being used, so other
+// apps (Jarvis, say) are not squeezed while Hark sits idle.
+const lowMemory = ramGb <= 10 || !!process.env.HARK_LOW_MEMORY;
+const llmIdleMs = Number(process.env.HARK_LLM_IDLE_MS) || 3 * 60e3;
+let llmBusy = 0;
+let llmUsedAt = Date.now();
+if (lowMemory)
+  setInterval(() => {
+    if (llm.running && llmLoaded && !llmBusy && Date.now() - llmUsedAt > llmIdleMs) {
+      llmLoaded = '';
+      llmInfo = null;
+      void llm.call('unload').then(() => refreshStatus({ llm: 'idle' })).catch(() => undefined);
+    }
+  }, Math.min(30e3, llmIdleMs)).unref();
+
 const stopped = new Set<string>();
 const intel = new Intelligence(
   lib,
   {
     generate: async (p) => {
-      await ensureLlm();
-      return llm.call<string>('generate', p);
+      llmBusy++;
+      try {
+        await ensureLlm();
+        return await llm.call<string>('generate', p);
+      } finally {
+        llmBusy--;
+        llmUsedAt = Date.now();
+      }
     },
     tokens: async (text) => {
       await ensureLlm();
@@ -778,7 +799,7 @@ else {
     void startPhone();
     // Load the speech model right away so the first recording starts instantly; the language model shortly after.
     void warmSpeech();
-    setTimeout(() => void ensureLlm().catch(() => undefined), 2500);
+    if (!lowMemory) setTimeout(() => void ensureLlm().catch(() => undefined), 2500);
     app.on('activate', () => {
       if (!BrowserWindow.getAllWindows().length) createWindow();
     });
