@@ -204,7 +204,7 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
       <div class="bar"><i id="bar"></i></div>
       <div class="intent" id="intent"></div>
       <div class="controls">
-        <button class="icon" id="btnReset" title="Reset" aria-label="Reset timer"><svg viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 1 0 2.4-5.5"/><path d="M4.5 4.5v4h4"/></svg></button>
+        <button class="icon" id="btnReset" title="Stop" aria-label="Stop and reset the timer"><svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></svg></button>
         <button class="go" id="btnGo"><svg viewBox="0 0 24 24" id="goIcon"><path d="M7 4.5v15l12-7.5z"/></svg><span id="goText">Start focus</span></button>
         <button class="icon" id="btnSkip" title="Skip" aria-label="Skip to next"><svg viewBox="0 0 24 24"><path d="M6 5.5v13l9-6.5zM18 5.5v13"/></svg></button>
       </div>
@@ -267,7 +267,7 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
                 </ol>
               </details>
               <p class="note">Weatherglass turns Do Not Disturb on when you start focus, for exactly the time left on the timer, and iPhone turns it off when that time is up. Pause, Reset or Skip turn it off straight away. Each time, your phone flicks to Shortcuts: tap <b>◀ Weatherglass</b> at the top-left to come back. The sound keeps playing.</p>
-              <button class="chip" id="btnDndTest">Test (1 minute)</button>
+              <div class="row"><button class="chip" id="btnDndTest">Test on (1 minute)</button><button class="chip" id="btnDndTestOff">Test off</button></div>
               </details>
             </div>
             <p class="note" id="dndOther" hidden>Do Not Disturb works through Apple’s Shortcuts app, so it’s available on iPhone, iPad and Mac. On Android, turn on Do Not Disturb or Focus mode from Quick Settings before you start.</p>
@@ -1431,8 +1431,8 @@ function startTimer(fromUser){
   T.running=true; T.endAt=Date.now()+T.remain; holdWake(true); if(!A.on && !mutedByUser) setSound(true); renderTimer(); save(); mediaInfo();
   if(fromUser && S.dnd && isApple && T.mode==='focus') runShortcut(T.remain/60000);
 }
-function pauseTimer(fromUser){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); if(fromUser) dndOff(); }
-function dndOff(){ if(S.dndActive && isApple) runShortcut(0); }
+function pauseTimer(fromUser){ const wasFocus=T.mode==='focus'; T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); if(fromUser) dndOff(wasFocus); }
+function dndOff(wasFocus){ if(isApple && (S.dndActive || (S.dnd && wasFocus))) runShortcut(0); }
 function finish(){
   if(T.mode==='focus'){
     const k=dayKey(); const d=S.log[k]||(S.log[k]={n:0,min:0}); d.n++; d.min+=Math.round(T.total/60000);
@@ -1465,8 +1465,8 @@ function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('sho
 LENS.forEach(mn=>{ const b=document.createElement('button'); b.textContent=mn; b.dataset.m=mn; b.title=mn+' minutes';
   b.onclick=()=>{ S.len=mn; if(T.mode==='focus'&&!T.running){ setMode('focus'); } renderTimer(); touch(); }; $('lens').appendChild(b); });
 $('btnGo').onclick = () => T.running ? pauseTimer(true) : startTimer(true);
-$('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); dndOff(); };
-$('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); dndOff(); };
+$('btnReset').onclick = () => { const wasFocus=T.mode==='focus'&&(T.running||T.remain<T.total); setMode(T.mode); holdWake(false); renderTimer(); save(); dndOff(wasFocus); };
+$('btnSkip').onclick = () => { const wasFocus=T.mode==='focus'&&(T.running||T.remain<T.total); setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); dndOff(wasFocus); };
 $('btnSound').onclick = () => { mutedByUser = A.on; setSound(!A.on); };
 const setZen = z => { document.body.classList.toggle('zen',z); if(z) toast('Tap anywhere to bring the controls back'); };
 $('btnZen').onclick = () => setZen(true);
@@ -1641,6 +1641,7 @@ function renderDnd(){
 $('btnDnd').onclick = toggleDnd;
 $('btnDndQuick').onclick = toggleDnd;
 $('btnDndTest').onclick = () => { S.dndSetup=true; save(); runShortcut(1); };
+$('btnDndTestOff').onclick = () => { S.dndSetup=true; save(); runShortcut(0); };
 $('dndCardClose').onclick = () => { $('dndCard').hidden=true; };
 $('dndLink').addEventListener('click',()=>{ setTimeout(()=>{ $('dndCard').hidden=true; },400); });
 $('btnCopyPrompt').onclick = async () => { const t=$('dndPrompt').textContent;

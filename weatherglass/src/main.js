@@ -268,8 +268,8 @@ function startTimer(fromUser){
   T.running=true; T.endAt=Date.now()+T.remain; holdWake(true); if(!A.on && !mutedByUser) setSound(true); renderTimer(); save(); mediaInfo();
   if(fromUser && S.dnd && isApple && T.mode==='focus') runShortcut(T.remain/60000);
 }
-function pauseTimer(fromUser){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); if(fromUser) dndOff(); }
-function dndOff(){ if(S.dndActive && isApple) runShortcut(0); }
+function pauseTimer(fromUser){ const wasFocus=T.mode==='focus'; T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); if(fromUser) dndOff(wasFocus); }
+function dndOff(wasFocus){ if(isApple && (S.dndActive || (S.dnd && wasFocus))) runShortcut(0); }
 function finish(){
   if(T.mode==='focus'){
     const k=dayKey(); const d=S.log[k]||(S.log[k]={n:0,min:0}); d.n++; d.min+=Math.round(T.total/60000);
@@ -302,8 +302,8 @@ function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('sho
 LENS.forEach(mn=>{ const b=document.createElement('button'); b.textContent=mn; b.dataset.m=mn; b.title=mn+' minutes';
   b.onclick=()=>{ S.len=mn; if(T.mode==='focus'&&!T.running){ setMode('focus'); } renderTimer(); touch(); }; $('lens').appendChild(b); });
 $('btnGo').onclick = () => T.running ? pauseTimer(true) : startTimer(true);
-$('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); dndOff(); };
-$('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); dndOff(); };
+$('btnReset').onclick = () => { const wasFocus=T.mode==='focus'&&(T.running||T.remain<T.total); setMode(T.mode); holdWake(false); renderTimer(); save(); dndOff(wasFocus); };
+$('btnSkip').onclick = () => { const wasFocus=T.mode==='focus'&&(T.running||T.remain<T.total); setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); dndOff(wasFocus); };
 $('btnSound').onclick = () => { mutedByUser = A.on; setSound(!A.on); };
 const setZen = z => { document.body.classList.toggle('zen',z); if(z) toast('Tap anywhere to bring the controls back'); };
 $('btnZen').onclick = () => setZen(true);
@@ -478,6 +478,7 @@ function renderDnd(){
 $('btnDnd').onclick = toggleDnd;
 $('btnDndQuick').onclick = toggleDnd;
 $('btnDndTest').onclick = () => { S.dndSetup=true; save(); runShortcut(1); };
+$('btnDndTestOff').onclick = () => { S.dndSetup=true; save(); runShortcut(0); };
 $('dndCardClose').onclick = () => { $('dndCard').hidden=true; };
 $('dndLink').addEventListener('click',()=>{ setTimeout(()=>{ $('dndCard').hidden=true; },400); });
 $('btnCopyPrompt').onclick = async () => { const t=$('dndPrompt').textContent;
