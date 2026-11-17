@@ -123,6 +123,16 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
 .steps ol{margin:8px 0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .steps b{color:var(--ink);font-weight:600}
 .steps .note{margin:6px 0}
+.prompt{margin:4px 0 8px;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid var(--glass-line);color:var(--ink);font-size:13px;line-height:1.45;user-select:text;-webkit-user-select:text}
+.dndpill{display:flex;align-items:center;gap:8px;height:34px;padding:0 14px 0 11px;border-radius:999px;background:var(--glass);border:1px solid var(--glass-line);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);font-size:13px;color:var(--ink-dim);transition:all .2s}
+.dndpill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round}
+.dndpill[aria-pressed="true"]{color:#141109;background:var(--ember);border-color:var(--ember)}
+.dndpill[aria-pressed="true"] svg{fill:currentColor}
+.dndcard{position:fixed;z-index:7;left:50%;top:50%;transform:translate(-50%,-50%);width:min(330px,calc(100vw - 32px));background:rgba(10,14,22,.82);border:1px solid var(--glass-line);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px;
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);text-align:left;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+.dndcard p{margin:0;font-size:13px;line-height:1.45;color:var(--ink-dim)}
+.dndgo{height:40px;padding:0 18px;font-size:14px;text-decoration:none}
 
 /* today */
 .add{display:flex;gap:8px}
@@ -208,6 +218,10 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
         <button class="icon" id="btnSkip" title="Skip" aria-label="Skip to next"><svg viewBox="0 0 24 24"><path d="M6 5.5v13l9-6.5zM18 5.5v13"/></svg></button>
       </div>
       <div class="lens" id="lens" role="group" aria-label="Focus length in minutes"></div>
+      <button class="dndpill" id="btnDndQuick" aria-pressed="false" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+        <span id="dndQuickText">Do Not Disturb off</span>
+      </button>
       <div class="hint" id="hint">tap the sky for lightning</div>
     </div>
   </main>
@@ -244,17 +258,25 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
               <button class="chip" id="btnDnd" aria-pressed="false">Turn on Do Not Disturb during focus</button>
               <details class="steps" id="dndSteps">
                 <summary>Set it up once (2 minutes)</summary>
-                <p class="note">A web page can’t switch Do Not Disturb on by itself, so Weatherglass runs a shortcut you make once in Apple’s Shortcuts app. It turns Do Not Disturb on until your session ends and starts a Clock timer that rings even with the screen locked.</p>
                 <ol>
-                  <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name the shortcut exactly <b>Weatherglass Focus</b>.</li>
-                  <li>Add <b>Adjust Date</b>. Set it to <i>Add</i>, tap the number and choose <b>Shortcut Input</b>, set the unit to <b>minutes</b>, and the date to <b>Current Date</b>.</li>
-                  <li>At the top, where it says <i>Receive … input</i>, set <i>If there’s no input</i> to <b>Ask For</b> a number. That way it still works if your phone doesn’t pass the minutes along.</li>
-                  <li>Add <b>Set Focus</b>. Make it read <i>Turn Do Not Disturb On until</i> <b>Time</b>, and set the time to <b>Adjusted Date</b>.</li>
-                  <li>Optional: add <b>Start Timer</b> for <b>Shortcut Input</b> minutes, so your phone rings when the session ends.</li>
-                  <li>Tap <b>Done</b>, come back here and tap <b>Test</b>. Allow Weatherglass to run the shortcut when asked.</li>
+                  <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name it exactly <b>Weatherglass Focus</b>.</li>
+                  <li>When it asks what the shortcut should do, paste this:</li>
                 </ol>
-                <p class="note">After it runs, tap <b>◀ Weatherglass</b> at the top-left of the screen to come back. The sound keeps playing. To end it early, turn Do Not Disturb off in Control Center.</p>
-                <button class="chip" id="btnDndTest">Test (1 minute)</button>
+                <p class="prompt" id="dndPrompt">Take the shortcut input as a number of minutes. If there is no input, ask me for a number of minutes. If the number is 0, turn off Do Not Disturb and stop. Otherwise, add that many minutes to the current date and turn on Do Not Disturb until that time.</p>
+                <button class="chip" id="btnCopyPrompt">Copy this</button>
+                <p class="note">Before you tap Done, check that it has: <b>If</b> the input is 0 → <b>Turn Do Not Disturb Off</b>; otherwise <b>Adjust Date</b> adds Shortcut Input <b>minutes</b> to Current Date, then <b>Set Focus</b>: Do Not Disturb <b>On until Time</b> = <b>Adjusted Date</b>.</p>
+                <p class="note">Then tap <b>Test (1 minute)</b> below and choose <b>Always Allow</b> if your phone asks.</p>
+              </details>
+              <details class="steps" id="dndManual">
+                <summary>Building it by hand instead</summary>
+                <ol>
+                  <li>Add <b>If</b>: Shortcut Input <b>is</b> 0. Inside it, add <b>Set Focus</b>: Turn <b>Do Not Disturb Off</b>, then <b>Stop This Shortcut</b>.</li>
+                  <li>After End If, add <b>Adjust Date</b>: Add <b>Shortcut Input</b> <b>minutes</b> to <b>Current Date</b>.</li>
+                  <li>Add <b>Set Focus</b>: Turn <b>Do Not Disturb On until Time</b>, time = <b>Adjusted Date</b>.</li>
+                </ol>
+              </details>
+              <p class="note">Weatherglass turns Do Not Disturb on when you start focus, for exactly the time left on the timer, and iPhone turns it off when that time is up. Pause, Reset or Skip turn it off straight away. Each time, your phone flicks to Shortcuts: tap <b>◀ Weatherglass</b> at the top-left to come back. The sound keeps playing.</p>
+              <button class="chip" id="btnDndTest">Test (1 minute)</button>
               </details>
             </div>
             <p class="note" id="dndOther" hidden>Do Not Disturb works through Apple’s Shortcuts app, so it’s available on iPhone, iPad and Mac. On Android, turn on Do Not Disturb or Focus mode from Quick Settings before you start.</p>
@@ -281,6 +303,11 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
   </aside>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<div class="dndcard" id="dndCard" hidden role="dialog" aria-label="Run the Do Not Disturb shortcut">
+        <p id="dndCardMsg"></p>
+        <div class="row"><a class="go dndgo" id="dndLink" href="#">Turn on Do Not Disturb</a><button class="chip" id="dndCardClose">Close</button></div>
+      </div>
+
 
 <script>
 (() => {
@@ -1367,11 +1394,31 @@ env.waves.push({t0:performance.now()/1000-2.2,str:.8}); nextWave = performance.n
    with the screen locked. */
 const SHORTCUT = 'Weatherglass Focus';
 const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
+const inFrame = (()=>{ try{ return window.top!==window; }catch(e){ return true; } })();
+const shortcutURL = m => 'shortcuts://run-shortcut?name='+encodeURIComponent(SHORTCUT)+'&input=text&text='+m;
+// minutes > 0: Do Not Disturb on until then. 0: off now.
 function runShortcut(minutes){
-  const url = 'shortcuts://run-shortcut?name='+encodeURIComponent(SHORTCUT)+'&input=text&text='+Math.max(1,Math.round(minutes));
-  try{ const a=document.createElement('a'); a.href=url; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); }catch(e){}
+  const m = minutes>0 ? Math.max(1,Math.ceil(minutes)) : 0, url = shortcutURL(m);
+  S.dndActive = m>0; save(); renderDnd();
+  try{
+    if(!inFrame) location.href = url;
+    else { const a=document.createElement('a'); a.href=url; a.target='_top'; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); }
+  }catch(e){}
+  // if the phone didn't switch to Shortcuts, offer a button to tap instead
+  clearTimeout(runShortcut.t); $('dndCard').hidden=true;
+  runShortcut.t = setTimeout(()=>{ if(!document.hidden) showDndCard(m); }, 1600);
   return url;
 }
+function showDndCard(m){
+  $('dndLink').href = shortcutURL(m);
+  $('dndLink').textContent = m>0 ? 'Turn on for '+m+' min' : 'Turn off now';
+  $('dndCardMsg').textContent = inFrame
+    ? 'Inside the Claude app, Weatherglass can’t open Shortcuts by itself. Tap the button. To make it automatic, open Weatherglass from your Home Screen or in Safari.'
+    : 'Your phone didn’t switch to Shortcuts. Tap the button. If nothing happens, check your shortcut is named exactly “'+SHORTCUT+'”.';
+  $('dndCard').hidden=false; setZenSafe();
+}
+function setZenSafe(){ document.body.classList.remove('zen'); }
+document.addEventListener('visibilitychange',()=>{ if(document.hidden){ clearTimeout(runShortcut.t); $('dndCard').hidden=true; } });
 function bell(kind){
   const ctx=A.ctx; if(!ctx||!A.on) return; const t=ctx.currentTime+.05;
   const notes = kind==='focus' ? [392,587.3,784,1174.7] : [523.3,784];
@@ -1392,18 +1439,19 @@ function startTimer(fromUser){
   const fresh = T.remain>=T.total-1000;
   T.running=true; T.endAt=Date.now()+T.remain; holdWake(true); if(!A.on && !mutedByUser) setSound(true); renderTimer(); save(); mediaInfo();
   if(fromUser && S.dnd && isApple && T.mode==='focus') runShortcut(T.remain/60000);
-  else if(fromUser && fresh && T.mode==='focus' && isApple && !S.dndAsked && !S.dnd){ S.dndAsked=true; save(); setTimeout(()=>toast('Want Do Not Disturb on during focus? See Today → Phone focus'),1500); }
 }
-function pauseTimer(){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); }
+function pauseTimer(fromUser){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); if(fromUser) dndOff(); }
+function dndOff(){ if(S.dndActive && isApple) runShortcut(0); }
 function finish(){
   if(T.mode==='focus'){
     const k=dayKey(); const d=S.log[k]||(S.log[k]={n:0,min:0}); d.n++; d.min+=Math.round(T.total/60000);
-    bell('focus'); toast('Session done. A lantern is lit.'); setMode('break'); startTimer(); renderLog(); touch();
+    S.dndActive=false; renderDnd(); bell('focus'); toast('Session done. A lantern is lit.'); setMode('break'); startTimer(); renderLog(); touch();
   } else { bell('break'); toast('Break over. Ready when you are.'); setMode('focus'); holdWake(false); }
   renderTimer(); save();
 }
 let lastShown='';
 function renderTimer(){
+  if($('btnDndQuick')) renderDnd();
   const rem = T.running ? Math.max(0,T.endAt-Date.now()) : T.remain;
   const s = Math.ceil(rem/1000), txt = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
   if(txt!==lastShown){ lastShown=txt; const el=$('digits'); el.textContent='';
@@ -1425,9 +1473,9 @@ setInterval(()=>{ if(T.running && Date.now()>=T.endAt){ T.remain=0; finish(); } 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.remove('show'),2600); }
 LENS.forEach(mn=>{ const b=document.createElement('button'); b.textContent=mn; b.dataset.m=mn; b.title=mn+' minutes';
   b.onclick=()=>{ S.len=mn; if(T.mode==='focus'&&!T.running){ setMode('focus'); } renderTimer(); touch(); }; $('lens').appendChild(b); });
-$('btnGo').onclick = () => T.running ? pauseTimer() : startTimer(true);
-$('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); };
-$('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); };
+$('btnGo').onclick = () => T.running ? pauseTimer(true) : startTimer(true);
+$('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); dndOff(); };
+$('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); dndOff(); };
 $('btnSound').onclick = () => { mutedByUser = A.on; setSound(!A.on); };
 const setZen = z => { document.body.classList.toggle('zen',z); if(z) toast('Tap anywhere to bring the controls back'); };
 $('btnZen').onclick = () => setZen(true);
@@ -1440,7 +1488,7 @@ cv.addEventListener('pointerdown',e=>{
 });
 addEventListener('keydown',e=>{
   if((e.target.tagName==='INPUT' && e.target.type!=='range') || e.target.tagName==='TEXTAREA') return;
-  if(e.code==='Space'){ e.preventDefault(); T.running?pauseTimer():startTimer(true); }
+  if(e.code==='Space'){ e.preventDefault(); T.running?pauseTimer(true):startTimer(true); }
   else if(e.key==='h'||e.key==='H') setZen(!document.body.classList.contains('zen'));
   else if(e.key==='m'||e.key==='M') $('btnSound').click();
   else if(e.key==='f'||e.key==='F') $('btnFull').click();
@@ -1577,12 +1625,36 @@ requestAnimationFrame(frame);
 setTimeout(()=>{ $('hint').style.opacity=0; },12000);
 initSync();
 if(TRACK_MODE) setTimeout(()=>queueTrack(0),2500);
+// One switch, shown under the timer and in Today. Turning it on mid-session applies it straight away.
+function toggleDnd(){
+  S.dnd=!S.dnd; save(); renderDnd();
+  const focusing = T.running && T.mode==='focus';
+  if(S.dnd){
+    if(!S.dndSetup){ S.dndSetup=true; save(); openDndSetup(); toast('Make the shortcut once, then tap Test'); return; }
+    if(focusing) runShortcut((T.endAt-Date.now())/60000);
+    else toast('Do Not Disturb will turn on when you start focus');
+  } else { if(focusing || S.dndActive) runShortcut(0); else toast('Do Not Disturb won’t be used'); }
+}
+function openDndSetup(){
+  if(isPhone()) panel.dataset.open='true';
+  for(const o of panel.querySelectorAll('[role=tab]')){ const on=o.dataset.tab==='today'; o.setAttribute('aria-selected',String(on)); $('pane-'+o.dataset.tab).hidden=!on; }
+  $('dndSteps').open=true; setTimeout(()=>$('dndBox').scrollIntoView({behavior:'smooth',block:'start'}),60);
+}
 function renderDnd(){
   $('dndApple').hidden=!isApple; $('dndOther').hidden=isApple;
-  $('btnDnd').setAttribute('aria-pressed',String(!!S.dnd)); $('btnDnd').textContent = S.dnd ? 'On: Do Not Disturb during focus' : 'Turn on Do Not Disturb during focus';
+  $('btnDndQuick').hidden=!isApple;
+  $('btnDnd').setAttribute('aria-pressed',String(!!S.dnd)); $('btnDnd').textContent = S.dnd ? 'Do Not Disturb during focus: on' : 'Do Not Disturb during focus: off';
+  $('btnDndQuick').setAttribute('aria-pressed',String(!!S.dnd));
+  $('dndQuickText').textContent = !S.dnd ? 'Do Not Disturb off' : (S.dndActive && T.running && T.mode==='focus') ? 'Do Not Disturb on' : 'Do Not Disturb with focus';
 }
-$('btnDnd').onclick = () => { S.dnd=!S.dnd; S.dndAsked=true; save(); renderDnd(); if(S.dnd){ $('dndSteps').open=true; toast('Make the shortcut below once, then tap Test'); } };
-$('btnDndTest').onclick = () => { runShortcut(1); toast('Running “'+SHORTCUT+'” for 1 minute'); };
+$('btnDnd').onclick = toggleDnd;
+$('btnDndQuick').onclick = toggleDnd;
+$('btnDndTest').onclick = () => { S.dndSetup=true; save(); runShortcut(1); };
+$('dndCardClose').onclick = () => { $('dndCard').hidden=true; };
+$('dndLink').addEventListener('click',()=>{ setTimeout(()=>{ $('dndCard').hidden=true; },400); });
+$('btnCopyPrompt').onclick = async () => { const t=$('dndPrompt').textContent;
+  try{ await navigator.clipboard.writeText(t); toast('Copied. Paste it into Shortcuts.'); }
+  catch(e){ const r=document.createRange(); r.selectNodeContents($('dndPrompt')); const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); toast('Selected. Tap Copy.'); } };
 renderDnd();
 window.__wg = {S,V,env,T,sky,actors,TR,A,TRACK_MODE,trackPlaying,buildTrack,runShortcut,spawn,strike,finish,setScene,setMode,renderLog,renderTimer,syncSkyUI,renderOffline,adopt,encodeXfer,setQ:q=>{fixedQ=q;resize();},get SC(){return SC;}};
 

@@ -222,11 +222,31 @@ env.waves.push({t0:performance.now()/1000-2.2,str:.8}); nextWave = performance.n
    with the screen locked. */
 const SHORTCUT = 'Weatherglass Focus';
 const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
+const inFrame = (()=>{ try{ return window.top!==window; }catch(e){ return true; } })();
+const shortcutURL = m => 'shortcuts://run-shortcut?name='+encodeURIComponent(SHORTCUT)+'&input=text&text='+m;
+// minutes > 0: Do Not Disturb on until then. 0: off now.
 function runShortcut(minutes){
-  const url = 'shortcuts://run-shortcut?name='+encodeURIComponent(SHORTCUT)+'&input=text&text='+Math.max(1,Math.round(minutes));
-  try{ const a=document.createElement('a'); a.href=url; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); }catch(e){}
+  const m = minutes>0 ? Math.max(1,Math.ceil(minutes)) : 0, url = shortcutURL(m);
+  S.dndActive = m>0; save(); renderDnd();
+  try{
+    if(!inFrame) location.href = url;
+    else { const a=document.createElement('a'); a.href=url; a.target='_top'; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); }
+  }catch(e){}
+  // if the phone didn't switch to Shortcuts, offer a button to tap instead
+  clearTimeout(runShortcut.t); $('dndCard').hidden=true;
+  runShortcut.t = setTimeout(()=>{ if(!document.hidden) showDndCard(m); }, 1600);
   return url;
 }
+function showDndCard(m){
+  $('dndLink').href = shortcutURL(m);
+  $('dndLink').textContent = m>0 ? 'Turn on for '+m+' min' : 'Turn off now';
+  $('dndCardMsg').textContent = inFrame
+    ? 'Inside the Claude app, Weatherglass can’t open Shortcuts by itself. Tap the button. To make it automatic, open Weatherglass from your Home Screen or in Safari.'
+    : 'Your phone didn’t switch to Shortcuts. Tap the button. If nothing happens, check your shortcut is named exactly “'+SHORTCUT+'”.';
+  $('dndCard').hidden=false; setZenSafe();
+}
+function setZenSafe(){ document.body.classList.remove('zen'); }
+document.addEventListener('visibilitychange',()=>{ if(document.hidden){ clearTimeout(runShortcut.t); $('dndCard').hidden=true; } });
 function bell(kind){
   const ctx=A.ctx; if(!ctx||!A.on) return; const t=ctx.currentTime+.05;
   const notes = kind==='focus' ? [392,587.3,784,1174.7] : [523.3,784];
@@ -247,18 +267,19 @@ function startTimer(fromUser){
   const fresh = T.remain>=T.total-1000;
   T.running=true; T.endAt=Date.now()+T.remain; holdWake(true); if(!A.on && !mutedByUser) setSound(true); renderTimer(); save(); mediaInfo();
   if(fromUser && S.dnd && isApple && T.mode==='focus') runShortcut(T.remain/60000);
-  else if(fromUser && fresh && T.mode==='focus' && isApple && !S.dndAsked && !S.dnd){ S.dndAsked=true; save(); setTimeout(()=>toast('Want Do Not Disturb on during focus? See Today → Phone focus'),1500); }
 }
-function pauseTimer(){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); }
+function pauseTimer(fromUser){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); if(fromUser) dndOff(); }
+function dndOff(){ if(S.dndActive && isApple) runShortcut(0); }
 function finish(){
   if(T.mode==='focus'){
     const k=dayKey(); const d=S.log[k]||(S.log[k]={n:0,min:0}); d.n++; d.min+=Math.round(T.total/60000);
-    bell('focus'); toast('Session done. A lantern is lit.'); setMode('break'); startTimer(); renderLog(); touch();
+    S.dndActive=false; renderDnd(); bell('focus'); toast('Session done. A lantern is lit.'); setMode('break'); startTimer(); renderLog(); touch();
   } else { bell('break'); toast('Break over. Ready when you are.'); setMode('focus'); holdWake(false); }
   renderTimer(); save();
 }
 let lastShown='';
 function renderTimer(){
+  if($('btnDndQuick')) renderDnd();
   const rem = T.running ? Math.max(0,T.endAt-Date.now()) : T.remain;
   const s = Math.ceil(rem/1000), txt = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
   if(txt!==lastShown){ lastShown=txt; const el=$('digits'); el.textContent='';
@@ -280,9 +301,9 @@ setInterval(()=>{ if(T.running && Date.now()>=T.endAt){ T.remain=0; finish(); } 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.remove('show'),2600); }
 LENS.forEach(mn=>{ const b=document.createElement('button'); b.textContent=mn; b.dataset.m=mn; b.title=mn+' minutes';
   b.onclick=()=>{ S.len=mn; if(T.mode==='focus'&&!T.running){ setMode('focus'); } renderTimer(); touch(); }; $('lens').appendChild(b); });
-$('btnGo').onclick = () => T.running ? pauseTimer() : startTimer(true);
-$('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); };
-$('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); };
+$('btnGo').onclick = () => T.running ? pauseTimer(true) : startTimer(true);
+$('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); dndOff(); };
+$('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); dndOff(); };
 $('btnSound').onclick = () => { mutedByUser = A.on; setSound(!A.on); };
 const setZen = z => { document.body.classList.toggle('zen',z); if(z) toast('Tap anywhere to bring the controls back'); };
 $('btnZen').onclick = () => setZen(true);
@@ -295,7 +316,7 @@ cv.addEventListener('pointerdown',e=>{
 });
 addEventListener('keydown',e=>{
   if((e.target.tagName==='INPUT' && e.target.type!=='range') || e.target.tagName==='TEXTAREA') return;
-  if(e.code==='Space'){ e.preventDefault(); T.running?pauseTimer():startTimer(true); }
+  if(e.code==='Space'){ e.preventDefault(); T.running?pauseTimer(true):startTimer(true); }
   else if(e.key==='h'||e.key==='H') setZen(!document.body.classList.contains('zen'));
   else if(e.key==='m'||e.key==='M') $('btnSound').click();
   else if(e.key==='f'||e.key==='F') $('btnFull').click();
@@ -432,11 +453,35 @@ requestAnimationFrame(frame);
 setTimeout(()=>{ $('hint').style.opacity=0; },12000);
 initSync();
 if(TRACK_MODE) setTimeout(()=>queueTrack(0),2500);
+// One switch, shown under the timer and in Today. Turning it on mid-session applies it straight away.
+function toggleDnd(){
+  S.dnd=!S.dnd; save(); renderDnd();
+  const focusing = T.running && T.mode==='focus';
+  if(S.dnd){
+    if(!S.dndSetup){ S.dndSetup=true; save(); openDndSetup(); toast('Make the shortcut once, then tap Test'); return; }
+    if(focusing) runShortcut((T.endAt-Date.now())/60000);
+    else toast('Do Not Disturb will turn on when you start focus');
+  } else { if(focusing || S.dndActive) runShortcut(0); else toast('Do Not Disturb won’t be used'); }
+}
+function openDndSetup(){
+  if(isPhone()) panel.dataset.open='true';
+  for(const o of panel.querySelectorAll('[role=tab]')){ const on=o.dataset.tab==='today'; o.setAttribute('aria-selected',String(on)); $('pane-'+o.dataset.tab).hidden=!on; }
+  $('dndSteps').open=true; setTimeout(()=>$('dndBox').scrollIntoView({behavior:'smooth',block:'start'}),60);
+}
 function renderDnd(){
   $('dndApple').hidden=!isApple; $('dndOther').hidden=isApple;
-  $('btnDnd').setAttribute('aria-pressed',String(!!S.dnd)); $('btnDnd').textContent = S.dnd ? 'On: Do Not Disturb during focus' : 'Turn on Do Not Disturb during focus';
+  $('btnDndQuick').hidden=!isApple;
+  $('btnDnd').setAttribute('aria-pressed',String(!!S.dnd)); $('btnDnd').textContent = S.dnd ? 'Do Not Disturb during focus: on' : 'Do Not Disturb during focus: off';
+  $('btnDndQuick').setAttribute('aria-pressed',String(!!S.dnd));
+  $('dndQuickText').textContent = !S.dnd ? 'Do Not Disturb off' : (S.dndActive && T.running && T.mode==='focus') ? 'Do Not Disturb on' : 'Do Not Disturb with focus';
 }
-$('btnDnd').onclick = () => { S.dnd=!S.dnd; S.dndAsked=true; save(); renderDnd(); if(S.dnd){ $('dndSteps').open=true; toast('Make the shortcut below once, then tap Test'); } };
-$('btnDndTest').onclick = () => { runShortcut(1); toast('Running “'+SHORTCUT+'” for 1 minute'); };
+$('btnDnd').onclick = toggleDnd;
+$('btnDndQuick').onclick = toggleDnd;
+$('btnDndTest').onclick = () => { S.dndSetup=true; save(); runShortcut(1); };
+$('dndCardClose').onclick = () => { $('dndCard').hidden=true; };
+$('dndLink').addEventListener('click',()=>{ setTimeout(()=>{ $('dndCard').hidden=true; },400); });
+$('btnCopyPrompt').onclick = async () => { const t=$('dndPrompt').textContent;
+  try{ await navigator.clipboard.writeText(t); toast('Copied. Paste it into Shortcuts.'); }
+  catch(e){ const r=document.createRange(); r.selectNodeContents($('dndPrompt')); const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); toast('Selected. Tap Copy.'); } };
 renderDnd();
 window.__wg = {S,V,env,T,sky,actors,TR,A,TRACK_MODE,trackPlaying,buildTrack,runShortcut,spawn,strike,finish,setScene,setMode,renderLog,renderTimer,syncSkyUI,renderOffline,adopt,encodeXfer,setQ:q=>{fixedQ=q;resize();},get SC(){return SC;}};

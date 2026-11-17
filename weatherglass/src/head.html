@@ -114,6 +114,16 @@ input.skyr::-webkit-slider-thumb{margin-top:-4px}
 .steps ol{margin:8px 0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
 .steps b{color:var(--ink);font-weight:600}
 .steps .note{margin:6px 0}
+.prompt{margin:4px 0 8px;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid var(--glass-line);color:var(--ink);font-size:13px;line-height:1.45;user-select:text;-webkit-user-select:text}
+.dndpill{display:flex;align-items:center;gap:8px;height:34px;padding:0 14px 0 11px;border-radius:999px;background:var(--glass);border:1px solid var(--glass-line);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);font-size:13px;color:var(--ink-dim);transition:all .2s}
+.dndpill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linejoin:round}
+.dndpill[aria-pressed="true"]{color:#141109;background:var(--ember);border-color:var(--ember)}
+.dndpill[aria-pressed="true"] svg{fill:currentColor}
+.dndcard{position:fixed;z-index:7;left:50%;top:50%;transform:translate(-50%,-50%);width:min(330px,calc(100vw - 32px));background:rgba(10,14,22,.82);border:1px solid var(--glass-line);border-radius:18px;padding:14px;display:flex;flex-direction:column;gap:10px;
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);text-align:left;box-shadow:0 14px 40px rgba(0,0,0,.4)}
+.dndcard p{margin:0;font-size:13px;line-height:1.45;color:var(--ink-dim)}
+.dndgo{height:40px;padding:0 18px;font-size:14px;text-decoration:none}
 
 /* today */
 .add{display:flex;gap:8px}
