@@ -58,6 +58,27 @@
           <ul class="tasks" id="tasks"></ul>
           <p class="note" id="exampleNote" hidden>These three are examples. <button class="chip" id="btnClearEx" style="height:24px;margin-left:4px">Clear them</button></p>
           <p class="note">Tap “aim” to put a task under the timer.</p>
+          <div class="group" id="dndBox">
+            <span class="label">Phone focus</span>
+            <div id="dndApple">
+              <button class="chip" id="btnDnd" aria-pressed="false">Turn on Do Not Disturb during focus</button>
+              <details class="steps" id="dndSteps">
+                <summary>Set it up once (2 minutes)</summary>
+                <p class="note">A web page can’t switch Do Not Disturb on by itself, so Weatherglass runs a shortcut you make once in Apple’s Shortcuts app. It turns Do Not Disturb on until your session ends and starts a Clock timer that rings even with the screen locked.</p>
+                <ol>
+                  <li>Open <b>Shortcuts</b>, tap <b>+</b>, and name the shortcut exactly <b>Weatherglass Focus</b>.</li>
+                  <li>Add <b>Adjust Date</b>. Set it to <i>Add</i>, tap the number and choose <b>Shortcut Input</b>, set the unit to <b>minutes</b>, and the date to <b>Current Date</b>.</li>
+                  <li>At the top, where it says <i>Receive … input</i>, set <i>If there’s no input</i> to <b>Ask For</b> a number. That way it still works if your phone doesn’t pass the minutes along.</li>
+                  <li>Add <b>Set Focus</b>. Make it read <i>Turn Do Not Disturb On until</i> <b>Time</b>, and set the time to <b>Adjusted Date</b>.</li>
+                  <li>Optional: add <b>Start Timer</b> for <b>Shortcut Input</b> minutes, so your phone rings when the session ends.</li>
+                  <li>Tap <b>Done</b>, come back here and tap <b>Test</b>. Allow Weatherglass to run the shortcut when asked.</li>
+                </ol>
+                <p class="note">After it runs, tap <b>◀ Weatherglass</b> at the top-left of the screen to come back. The sound keeps playing. To end it early, turn Do Not Disturb off in Control Center.</p>
+                <button class="chip" id="btnDndTest">Test (1 minute)</button>
+              </details>
+            </div>
+            <p class="note" id="dndOther" hidden>Do Not Disturb works through Apple’s Shortcuts app, so it’s available on iPhone, iPad and Mac. On Android, turn on Do Not Disturb or Focus mode from Quick Settings before you start.</p>
+          </div>
         </div>
         <div class="pane" id="pane-log" hidden>
           <div class="stats">

@@ -169,3 +169,33 @@ async function renderOffline(mix,sec,o={}){
   if(o.thunder) thunderSound(E,.5,o.dist===undefined?.2:o.dist,0,1);
   return ctx.startRendering();
 }
+
+/* ───────── background track: the mix rendered into a seamless loop for an <audio> element.
+   Phones pause live Web Audio when the screen locks; a playing <audio> element keeps going,
+   like a music app. Wave and thunder times are returned so the picture can follow the sound. */
+const LOOP_SEC = 60, LOOP_XF = 4, LOOP_SR = 32000;
+async function renderLoop(mix,o={}){
+  const OAC = window.OfflineAudioContext||window.webkitOfflineAudioContext; if(!OAC) return null;
+  const L = LOOP_SEC, X = LOOP_XF, sr = LOOP_SR, tot = L+X;
+  const ctx = new OAC(2,Math.ceil(tot*sr),sr), E = buildAudio(ctx), st = {};
+  setLevels(E,mix,true,.8,.01);
+  for(let t=0;t<tot;t+=.2) stepAudio(E,t,.2,st,{mix,gust:gustAt(t*3+(o.seed||0)),day:o.day===undefined?1:o.day,scene:o.scene||'lake',dawn:!!o.dawn});
+  const waves=[], strikes=[];
+  if(mix.shore>.02) for(let t=X+.3;t<L-10;t+=6.5+Math.random()*4.5){ const s=.6+Math.random()*.4; waves.push({t,str:s}); waveSound(E,t,s); }
+  if(mix.thunder>.03) for(let t=X+2+Math.random()*4;t<L-9;t+=lerp(42,6.5,mix.thunder)*(.55+Math.random()*.95)){
+    const dist=.15+Math.random()*.8, x=.08+Math.random()*.84, power=.55+Math.random()*.45;
+    strikes.push({t,x,power}); thunderSound(E,t+.08+dist*1.9,dist,(x-.5)*1.4,power); }
+  const buf = await ctx.startRendering();
+  const n = Math.round(L*sr), nx = Math.round(X*sr), a = buf.getChannelData(0), b = buf.getChannelData(1);
+  // equal-power crossfade of the tail into the head makes the loop seamless
+  const pcm = new Int16Array(n*2);
+  for(let i=0;i<n;i++){
+    let l=a[i], r=b[i];
+    if(i<nx){ const f=i/nx, gi=Math.sin(f*Math.PI/2), go=Math.cos(f*Math.PI/2); l=l*gi+a[n+i]*go; r=r*gi+b[n+i]*go; }
+    pcm[i*2] = Math.max(-1,Math.min(1,l))*32767; pcm[i*2+1] = Math.max(-1,Math.min(1,r))*32767;
+  }
+  const head = new DataView(new ArrayBuffer(44)), w=(o,s)=>{ for(let i=0;i<s.length;i++) head.setUint8(o+i,s.charCodeAt(i)); };
+  w(0,'RIFF'); head.setUint32(4,36+pcm.byteLength,true); w(8,'WAVEfmt '); head.setUint32(16,16,true); head.setUint16(20,1,true); head.setUint16(22,2,true);
+  head.setUint32(24,sr,true); head.setUint32(28,sr*4,true); head.setUint16(32,4,true); head.setUint16(34,16,true); w(36,'data'); head.setUint32(40,pcm.byteLength,true);
+  return { blob:new Blob([head.buffer,pcm.buffer],{type:'audio/wav'}), len:L, waves, strikes };
+}

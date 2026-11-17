@@ -104,49 +104,129 @@ function frame(now){
   gl.drawArrays(gl.TRIANGLES,0,3);
 }
 
-/* ───────── live audio ───────── */
+/* ───────── sound ─────────
+   Desktop: the live engine. Phones and tablets: the mix is rendered into a looping track played
+   by an <audio> element, which keeps playing with the screen locked or the app in the background.
+   The live engine stays on for thunder you call by tapping and for the end-of-session bell. */
 const A = {ctx:null,E:null,on:false,st:{}};
+const TRACK_MODE = matchMedia('(pointer:coarse)').matches || /[?&]track=1/.test(location.search);
+const TR = {el:null, cur:null, busy:false, id:0, key:'', lastPos:0, quietUntil:0};
+const quiet = () => { TR.quietUntil = performance.now()+1500; };
 let mutedByUser=false, nextAuto=0, nextWave=0;
-function iosUnlock(){   // a silent looping <audio> keeps iPhone sound playing with the ring switch off
-  if(iosUnlock.el) return;
-  try{ const n=4000, b=new Uint8Array(44+n), dv=new DataView(b.buffer), w=(o,s)=>{ for(let i=0;i<s.length;i++) b[o+i]=s.charCodeAt(i); };
-    w(0,'RIFF'); dv.setUint32(4,36+n,true); w(8,'WAVEfmt '); dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
-    dv.setUint32(24,8000,true); dv.setUint32(28,8000,true); dv.setUint16(32,1,true); dv.setUint16(34,8,true); w(36,'data'); dv.setUint32(40,n,true); b.fill(128,44);
-    let s=''; for(let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]);
-    const a=iosUnlock.el=document.createElement('audio'); a.loop=true; a.setAttribute('playsinline',''); a.src='data:audio/wav;base64,'+btoa(s); a.play().catch(()=>{});
-  }catch(e){}
-}
 function initAudio(){
   if(A.ctx) return;
   const AC = window.AudioContext||window.webkitAudioContext; if(!AC) return;
   try{ A.ctx = new AC(); A.E = buildAudio(A.ctx); }catch(e){ A.ctx=null; console.error('Weatherglass audio:',e); }
 }
-function applyLevels(fast){ if(A.E) setLevels(A.E,S.mix,A.on,S.vol,fast?.05:.5); }
-function setSound(on){
-  if(on){ initAudio(); if(!A.ctx){ toast('This browser cannot play sound'); return; } iosUnlock(); A.ctx.resume(); }
-  A.on = on && !!A.ctx; applyLevels();
+const trackPlaying = () => !!(TR.el && TR.cur && A.on && !TR.el.paused && TR.el.src===TR.cur.url);
+function trackEl(){
+  if(TR.el) return TR.el;
+  const el = TR.el = document.createElement('audio'); el.loop = true; el.preload = 'auto'; el.setAttribute('playsinline',''); el.setAttribute('webkit-playsinline','');
+  const ours = () => performance.now() < TR.quietUntil;
+  // paused or played from the lock screen, headphones, or by a phone call: follow it
+  el.addEventListener('pause',()=>{ if(A.on && !ours()) setSound(false,true); });
+  el.addEventListener('play',()=>{ if(!A.on && !ours() && TR.cur && el.src===TR.cur.url){ mutedByUser=false; A.on=true; initAudio(); applyLevels(); syncSoundUI(); } });
+  document.body.appendChild(el); return el;
+}
+const SILENT = (()=>{ const n=800, b=new Uint8Array(44+n), dv=new DataView(b.buffer), w=(o,t)=>{ for(let i=0;i<t.length;i++) b[o+i]=t.charCodeAt(i); };
+  w(0,'RIFF'); dv.setUint32(4,36+n,true); w(8,'WAVEfmt '); dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,8000,true); dv.setUint32(28,8000,true); dv.setUint16(32,1,true); dv.setUint16(34,8,true); w(36,'data'); dv.setUint32(40,n,true); b.fill(128,44);
+  let t=''; for(let i=0;i<b.length;i++) t+=String.fromCharCode(b[i]); return 'data:audio/wav;base64,'+btoa(t); })();
+function trackKey(){ const h=sky.min/60, d=env.day; return JSON.stringify([S.mix,S.scene,d<.2?0:d>.5?2:1,h>4.8&&h<9]); }
+function queueTrack(delay=1200){
+  if(!TRACK_MODE) return;
+  clearTimeout(queueTrack.t); queueTrack.t = setTimeout(()=>{ queueTrack.t=0; buildTrack(); }, delay);
+}
+async function buildTrack(){
+  const key = trackKey(); if(TR.cur && TR.key===key) return;
+  if(TR.busy){ TR.again=true; return; }
+  TR.busy=true; const id=++TR.id, h=sky.min/60;
+  try{
+    const r = await renderLoop({...S.mix},{day:env.day,scene:S.scene,dawn:h>4.8&&h<9,seed:Math.random()*99});
+    if(r && id===TR.id){ const old=TR.cur; TR.cur={...r,url:URL.createObjectURL(r.blob)}; TR.key=key; useTrack(); if(old) setTimeout(()=>URL.revokeObjectURL(old.url),4000); }
+  }catch(e){ console.error('Weatherglass track:',e); }
+  TR.busy=false; if(TR.again){ TR.again=false; queueTrack(200); }
+}
+function useTrack(){   // swap the new render in, at the same point in the loop
+  if(!A.on || !TR.cur) return;
+  const el=trackEl(), pos = el.src===SILENT||!el.duration ? 0 : (el.currentTime % TR.cur.len);
+  quiet(); el.src=TR.cur.url;
+  const go=()=>{ try{ el.currentTime=pos; }catch(e){} quiet(); el.play().then(()=>applyLevels()).catch(()=>{}); };
+  if(el.readyState>=1) go(); else el.addEventListener('loadedmetadata',go,{once:true});
+  TR.lastPos=pos; mediaInfo();
+}
+function applyLevels(fast){
+  if(!A.E) return;
+  const m = trackPlaying() ? {rain:0,wind:0,fire:0,shore:0,mist:0,life:0,thunder:S.mix.thunder} : S.mix;   // the track carries the beds
+  setLevels(A.E,m,A.on,S.vol,fast?.05:.5);
+}
+function mediaInfo(){
+  const ms=navigator.mediaSession; if(!ms) return;
+  try{
+    ms.metadata = new MediaMetadata({title:SCENES[S.scene].name+(S.weather&&S.weather!=='Clear'?' · '+S.weather:''), artist:'Weatherglass', album:T.mode==='focus'?'Focus':'Break',
+      artwork:[{src:'icon-512.png',sizes:'512x512',type:'image/png'},{src:'icon-192.png',sizes:'192x192',type:'image/png'}]});
+    ms.playbackState = A.on ? 'playing' : 'paused';
+  }catch(e){}
+}
+if(navigator.mediaSession){ try{
+  navigator.mediaSession.setActionHandler('play',()=>{ mutedByUser=false; setSound(true); });
+  navigator.mediaSession.setActionHandler('pause',()=>{ mutedByUser=true; setSound(false); });
+  navigator.mediaSession.setActionHandler('stop',()=>{ mutedByUser=true; setSound(false); });
+}catch(e){} }
+function setSound(on, fromEl){
+  if(on){
+    initAudio(); if(!A.ctx){ toast('This browser cannot play sound'); return; } A.ctx.resume().catch(()=>{});
+    if(TRACK_MODE){ const el=trackEl(); A.on=true;
+      if(TR.cur && TR.key===trackKey()) useTrack();
+      else { if(!TR.cur){ quiet(); el.src=SILENT; el.play().catch(()=>{}); } else useTrack(); queueTrack(0); } }   // the silent play unlocks the element inside this tap
+  }
+  A.on = on && !!A.ctx;
+  if(!A.on && TR.el && !fromEl){ quiet(); TR.el.pause(); }
+  applyLevels();
   if(!on && A.ctx) setTimeout(()=>{ if(!A.on) A.ctx.suspend(); },700);
-  $('btnSound').setAttribute('aria-pressed',A.on?'true':'false');
-  $('sndWaves').style.opacity = A.on?1:.25;
+  syncSoundUI();
 }
-function strike(x, manual){
+function syncSoundUI(){ $('btnSound').setAttribute('aria-pressed',A.on?'true':'false'); $('sndWaves').style.opacity = A.on?1:.25; mediaInfo(); }
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden && A.on && A.ctx && A.ctx.state!=='running') A.ctx.resume().catch(()=>{}); });
+function strike(x, manual, silent){
   bolt.x = clamp(x,.04,.96); bolt.seed = Math.random()*50; bolt.t0 = performance.now(); bolt.power = manual?1:.55+Math.random()*.45;
-  if(A.on){ const dist = manual?Math.random()*.35:.15+Math.random()*.8; thunderSound(A.E, A.ctx.currentTime+.08+dist*1.9, dist, (bolt.x-.5)*1.4, manual?1:bolt.power); }
+  if(A.on && !silent){ const dist = manual?Math.random()*.35:.15+Math.random()*.8; thunderSound(A.E, A.ctx.currentTime+.08+dist*1.9, dist, (bolt.x-.5)*1.4, manual?1:bolt.power); }
 }
-// The world clock: waves (seen and heard together), lightning, and the small random sounds.
+// The world clock: waves and lightning, seen and heard together, and the small random sounds.
 setInterval(()=>{
   const now=performance.now()/1000;
-  if(now>=nextWave){ const ev={t0:now,str:.6+Math.random()*.4}; env.waves.push(ev); if(env.waves.length>4) env.waves.shift();
-    if(A.on && S.mix.shore>.02) waveSound(A.E,A.ctx.currentTime+.05,ev.str);
-    nextWave = now + 6.5 + Math.random()*4.5; }
-  const th=S.mix.thunder;
-  if(th>.03 && !reduceMotion && !document.hidden){
-    if(!nextAuto) nextAuto = now + 1.5 + Math.random()*4;
-    if(now>=nextAuto){ strike(.08+Math.random()*.84,false); nextAuto = now + lerp(42,6.5,th)*(.55+Math.random()*.95); }
-  } else nextAuto = 0;
-  if(A.on){ const h=sky.min/60; stepAudio(A.E,A.ctx.currentTime,.2,A.st,{mix:S.mix,gust:env.gust,day:env.day,scene:S.scene,dawn:h>4.8&&h<9}); }
+  if(trackPlaying()){
+    // follow the track: fire each wave and strike as the playhead passes it
+    const pos=TR.el.currentTime, last=TR.lastPos, crossed=t=> last<=pos ? (t>last&&t<=pos) : (t>last||t<=pos);
+    for(const w of TR.cur.waves) if(crossed(w.t)){ const ev={t0:now-((pos-w.t+TR.cur.len)%TR.cur.len),str:w.str}; env.waves.push(ev); if(env.waves.length>4) env.waves.shift(); }
+    if(!reduceMotion && !document.hidden) for(const k of TR.cur.strikes) if(crossed(k.t)){ strike(k.x,false,true); bolt.power=k.power; }
+    TR.lastPos=pos; nextWave=now+4; nextAuto=0;
+    if(TR.key!==trackKey() && !TR.busy && !queueTrack.t) queueTrack(1500);
+  } else {
+    if(now>=nextWave){ const ev={t0:now,str:.6+Math.random()*.4}; env.waves.push(ev); if(env.waves.length>4) env.waves.shift();
+      if(A.on && S.mix.shore>.02) waveSound(A.E,A.ctx.currentTime+.05,ev.str);
+      nextWave = now + 6.5 + Math.random()*4.5; }
+    const th=S.mix.thunder;
+    if(th>.03 && !reduceMotion && !document.hidden){
+      if(!nextAuto) nextAuto = now + 1.5 + Math.random()*4;
+      if(now>=nextAuto){ strike(.08+Math.random()*.84,false); nextAuto = now + lerp(42,6.5,th)*(.55+Math.random()*.95); }
+    } else nextAuto = 0;
+    if(A.on){ const h=sky.min/60; stepAudio(A.E,A.ctx.currentTime,.2,A.st,{mix:S.mix,gust:env.gust,day:env.day,scene:S.scene,dawn:h>4.8&&h<9}); }
+  }
 },200);
 env.waves.push({t0:performance.now()/1000-2.2,str:.8}); nextWave = performance.now()/1000+4;
+
+/* ───────── Do Not Disturb through an Apple Shortcut ─────────
+   A web page cannot change Focus itself. It can run a Shortcut the user made once, which
+   turns on Do Not Disturb until the session ends and starts a Clock timer that rings even
+   with the screen locked. */
+const SHORTCUT = 'Weatherglass Focus';
+const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent);
+function runShortcut(minutes){
+  const url = 'shortcuts://run-shortcut?name='+encodeURIComponent(SHORTCUT)+'&input=text&text='+Math.max(1,Math.round(minutes));
+  try{ const a=document.createElement('a'); a.href=url; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); }catch(e){}
+  return url;
+}
 function bell(kind){
   const ctx=A.ctx; if(!ctx||!A.on) return; const t=ctx.currentTime+.05;
   const notes = kind==='focus' ? [392,587.3,784,1174.7] : [523.3,784];
@@ -162,7 +242,13 @@ let wake=null;
 async function holdWake(on){ try{ if(on && navigator.wakeLock){ wake = await navigator.wakeLock.request('screen'); } else if(wake){ await wake.release(); wake=null; } }catch(e){} }
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden && T.running) holdWake(true); });
 function setMode(mode){ T.mode=mode; T.total = (mode==='focus'?S.len:Math.max(1,Math.round(S.len/5)))*60000; T.remain=T.total; T.running=false; }
-function startTimer(){ if(T.remain<=0) setMode(T.mode); T.running=true; T.endAt=Date.now()+T.remain; holdWake(true); if(!A.on && !mutedByUser) setSound(true); renderTimer(); save(); }
+function startTimer(fromUser){
+  if(T.remain<=0) setMode(T.mode);
+  const fresh = T.remain>=T.total-1000;
+  T.running=true; T.endAt=Date.now()+T.remain; holdWake(true); if(!A.on && !mutedByUser) setSound(true); renderTimer(); save(); mediaInfo();
+  if(fromUser && S.dnd && isApple && T.mode==='focus') runShortcut(T.remain/60000);
+  else if(fromUser && fresh && T.mode==='focus' && isApple && !S.dndAsked && !S.dnd){ S.dndAsked=true; save(); setTimeout(()=>toast('Want Do Not Disturb on during focus? See Today → Phone focus'),1500); }
+}
 function pauseTimer(){ T.remain=Math.max(0,T.endAt-Date.now()); T.running=false; holdWake(false); renderTimer(); save(); }
 function finish(){
   if(T.mode==='focus'){
@@ -194,7 +280,7 @@ setInterval(()=>{ if(T.running && Date.now()>=T.endAt){ T.remain=0; finish(); } 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toast.t); toast.t=setTimeout(()=>t.classList.remove('show'),2600); }
 LENS.forEach(mn=>{ const b=document.createElement('button'); b.textContent=mn; b.dataset.m=mn; b.title=mn+' minutes';
   b.onclick=()=>{ S.len=mn; if(T.mode==='focus'&&!T.running){ setMode('focus'); } renderTimer(); touch(); }; $('lens').appendChild(b); });
-$('btnGo').onclick = () => T.running ? pauseTimer() : startTimer();
+$('btnGo').onclick = () => T.running ? pauseTimer() : startTimer(true);
 $('btnReset').onclick = () => { setMode(T.mode); holdWake(false); renderTimer(); save(); };
 $('btnSkip').onclick = () => { setMode(T.mode==='focus'?'break':'focus'); holdWake(false); renderTimer(); save(); };
 $('btnSound').onclick = () => { mutedByUser = A.on; setSound(!A.on); };
@@ -209,7 +295,7 @@ cv.addEventListener('pointerdown',e=>{
 });
 addEventListener('keydown',e=>{
   if((e.target.tagName==='INPUT' && e.target.type!=='range') || e.target.tagName==='TEXTAREA') return;
-  if(e.code==='Space'){ e.preventDefault(); T.running?pauseTimer():startTimer(); }
+  if(e.code==='Space'){ e.preventDefault(); T.running?pauseTimer():startTimer(true); }
   else if(e.key==='h'||e.key==='H') setZen(!document.body.classList.contains('zen'));
   else if(e.key==='m'||e.key==='M') $('btnSound').click();
   else if(e.key==='f'||e.key==='F') $('btnFull').click();
@@ -232,18 +318,18 @@ function setScene(name){
   if(!SCENES[name] || (name===S.scene && !pendingScene)) return;
   pendingScene = name; const w = WEATHER[S.weather]||{};
   S.mix = {...SCENES[name].mix, ...(S.weather&&S.weather!=='Clear'?w:{})};
-  syncMix(); applyLevels(); markChips(name); save();
+  syncMix(); applyLevels(); markChips(name); save(); queueTrack(); mediaInfo();
 }
 function buildMix(){
   for(const id in SCENES){ const c=document.createElement('button'); c.className='chip'; c.textContent=SCENES[id].name; c.dataset.s=id; c.onclick=()=>setScene(id); $('places').appendChild(c); }
   for(const name in WEATHER){ const c=document.createElement('button'); c.className='chip'; c.textContent=name; c.dataset.p=name;
-    c.onclick=()=>{ const base=SCENES[pendingScene||S.scene].mix; S.mix={...S.mix, rain:0, thunder:0, wind:base.wind, ...WEATHER[name]}; S.weather=name; syncMix(); applyLevels(); save(); }; $('presets').appendChild(c); }
+    c.onclick=()=>{ const base=SCENES[pendingScene||S.scene].mix; S.mix={...S.mix, rain:0, thunder:0, wind:base.wind, ...WEATHER[name]}; S.weather=name; syncMix(); applyLevels(); save(); queueTrack(); mediaInfo(); }; $('presets').appendChild(c); }
   const box=$('mix');
   for(const L of LAYERS){
     const lab=document.createElement('label'); lab.textContent=L.name; lab.htmlFor='mx-'+L.id;
     const r=document.createElement('input'); r.type='range'; r.min=0; r.max=100; r.id='mx-'+L.id;
     const o=document.createElement('output'); o.htmlFor=r.id;
-    r.oninput=()=>{ S.mix[L.id]=r.value/100; if(L.id==='rain'||L.id==='thunder') S.weather=''; o.textContent=r.value; fill(r); applyLevels(true); markChips(); save(); };
+    r.oninput=()=>{ S.mix[L.id]=r.value/100; if(L.id==='rain'||L.id==='thunder') S.weather=''; o.textContent=r.value; fill(r); applyLevels(true); markChips(); save(); queueTrack(); };
     box.append(lab,r,o);
   }
 }
@@ -345,4 +431,12 @@ if(!glOK){ cv.style.background='linear-gradient(#0b1230,#3a2a5c 55%,#0a1420 56%,
 requestAnimationFrame(frame);
 setTimeout(()=>{ $('hint').style.opacity=0; },12000);
 initSync();
-window.__wg = {S,V,env,T,sky,actors,spawn,strike,finish,setScene,setMode,renderLog,renderTimer,syncSkyUI,renderOffline,adopt,encodeXfer,setQ:q=>{fixedQ=q;resize();},get SC(){return SC;}};
+if(TRACK_MODE) setTimeout(()=>queueTrack(0),2500);
+function renderDnd(){
+  $('dndApple').hidden=!isApple; $('dndOther').hidden=isApple;
+  $('btnDnd').setAttribute('aria-pressed',String(!!S.dnd)); $('btnDnd').textContent = S.dnd ? 'On: Do Not Disturb during focus' : 'Turn on Do Not Disturb during focus';
+}
+$('btnDnd').onclick = () => { S.dnd=!S.dnd; S.dndAsked=true; save(); renderDnd(); if(S.dnd){ $('dndSteps').open=true; toast('Make the shortcut below once, then tap Test'); } };
+$('btnDndTest').onclick = () => { runShortcut(1); toast('Running “'+SHORTCUT+'” for 1 minute'); };
+renderDnd();
+window.__wg = {S,V,env,T,sky,actors,TR,A,TRACK_MODE,trackPlaying,buildTrack,runShortcut,spawn,strike,finish,setScene,setMode,renderLog,renderTimer,syncSkyUI,renderOffline,adopt,encodeXfer,setQ:q=>{fixedQ=q;resize();},get SC(){return SC;}};
