@@ -11,7 +11,7 @@ import { Models, entry, recommendedLlm } from './models';
 import { TranscriptionSession, type SpeechApi } from './pipeline';
 import { Intelligence } from './intelligence';
 import { normalize } from '../shared/speakers';
-import { markdownToHtml, retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
+import { fmtTime, markdownToHtml, retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
 import QRCode from 'qrcode';
 import { lanAddresses, servePhone, type PhoneNotes, type PhoneServer, type UploadMeta } from './phone';
 import { PeakMeter } from '../shared/vad';
@@ -270,6 +270,28 @@ const intel = new Intelligence(
 );
 
 const study = new Study(lib, llmApi, (e) => send('stream', e), (id) => stopped.has(id));
+/** The parts of the study record a library-wide question is about: revision progress and/or the case bank. Empty when neither. */
+async function studyRecord(question: string): Promise<string> {
+  const out: string[] = [];
+  if (/\b(revis|practi[cs]|tested|test myself|weak|strong|struggl|forget|spaced|flashcards?|sbaqs?|quiz|progress|recently|haven'?t (looked|studied|done))/i.test(question)) {
+    const o = await api.revisionOverview();
+    const days = (t: number) => (t ? `${Math.round((Date.now() - t) / 864e5)} days ago` : 'never');
+    out.push(
+      `Revision by topic (state, accuracy, items tried, last practised):\n${o.topics.map((t) => `- ${t.topic}: ${({ needs: 'needs revision', untested: 'not yet tested', improving: 'improving', strong: 'strong' } as const)[t.state]}${t.tested ? `, ${Math.round(t.accuracy * 100)}% right` : ''}, ${t.tested}/${t.items} tried, last practised ${days(t.lastPractised)}${t.due ? `, ${t.due} due now` : ''}${t.confusing ? `, ${t.confusing} passages marked confusing` : ''}${t.asked ? `, asked the tutor ${t.asked} times` : ''} (lectures: ${t.lectures.join(', ')})`).join('\n') || '(no revision material yet)'}`,
+      `Lectures with no revision material yet: ${lib.list().filter((m) => m.template === 'lecture' && !o.topics.some((t) => t.lectures.includes(m.title))).map((m) => m.title).join(', ') || 'none'}`,
+      `Lectures never tested: ${o.totals.untestedLectures.map((l) => l.title).join(', ') || 'none'}`,
+    );
+  }
+  if (/\b(cases?|authorit|statutes?|legislation|acts?)\b/i.test(question)) {
+    const rows = lib.list().flatMap((m) => {
+      const legal = study.get(m.id).legal;
+      return legal ? [...legal.cases.filter((c) => c.found).map((c) => `- ${c.name}: ${c.principle || c.facts} [${m.title}, ${fmtTime(Math.max(0, c.t))}]`), ...legal.laws.map((l) => `- ${l.name}${l.section ? ` s ${l.section}` : ''}${l.said ? `: ${l.said}` : ''} [${m.title}, ${fmtTime(Math.max(0, l.t))}]`)] : [];
+    });
+    if (rows.length) out.push(`Case bank (cases and legislation from my lectures, with where they were discussed):\n${rows.slice(0, 60).join('\n')}`);
+  }
+  return out.join('\n\n').slice(0, 9000);
+}
+
 const outlinesFile = path.join(dataDir, 'outlines.json');
 const readOutlines = (): Record<string, { text: string; at: number }> => {
   try {
@@ -910,7 +932,7 @@ const api: Api = {
   },
   chat: (id, question, streamId, mode, passage) => intel.chat(id, question, streamId, mode, passage),
   clearChat: async (id) => lib.update(id, { chat: [] }),
-  ask: (question, streamId) => intel.ask(question, streamId),
+  ask: async (question, streamId) => intel.ask(question, streamId, await studyRecord(question)),
   topicOutline: async (topic, folder, streamId) => {
     stopped.delete(streamId);
     const ids = lib.list().filter((m) => !folder || m.folder === folder).map((m) => m.id);

@@ -326,7 +326,8 @@ export class Intelligence {
   }
 
   /** Ask a question across every conversation in the library. */
-  async ask(question: string, streamId: string): Promise<ChatMsg> {
+  /** `record` is the student's own study record (revision progress, case list) when the question is about it. */
+  async ask(question: string, streamId: string, record = ''): Promise<ChatMsg> {
     const all = this.lib.list().filter((m) => m.status === 'ready');
     for (const m of all) if (!this.lib.vectors(m.id).length && this.lib.transcript(m.id).length) await this.index(m.id);
     const top = (await this.retrieve(question, all.map((m) => m.id), 8)).filter((t) => t.score > 0.12);
@@ -340,19 +341,19 @@ export class Intelligence {
     const excerpts = top
       .map((t, i) => `[${i + 1}] From "${sources[i].title}" (${new Date(sources[i].date).toDateString()}, at ${fmtTime(t.chunk.s)}):\n${t.chunk.text}`)
       .join('\n\n');
-    const system = `You are Hark, the user's private memory of their recorded conversations. Answer using only the numbered excerpts provided with each question. Cite the excerpts you used with their numbers in square brackets, like [1] or [2][3]. If the excerpts do not contain the answer, say you could not find it in their conversations. Be direct and brief. Today is ${new Date().toDateString()}.`;
+    const system = `You are Hark, the user's private memory of their recorded conversations. Answer using only the numbered excerpts provided with each question. Cite the excerpts you used with their numbers in square brackets, like [1] or [2][3]. If the excerpts do not contain the answer, say you could not find it in their conversations. Be direct and brief. Today is ${new Date().toDateString()}.${record ? ' IMPORTANT: the user\'s study record (revision progress by topic, and their case bank) is provided after the excerpts. It is real data about them: use it for any question about what they have revised, tested or struggle with, or which cases or statutes they have studied, and call it "your revision record" or "your case bank". Only say you could not find something if neither the excerpts nor the record answer it.' : ''}`;
     try {
-      const text = top.length
+      const text = top.length || record
         ? await this.llm.generate({
             streamId,
             system,
             history: past.slice(-4).map((c) => ({ role: c.role, text: c.text })),
-            prompt: `Excerpts from my conversations:\n\n${excerpts}\n\nQuestion: ${question}`,
+            prompt: `${top.length ? `Excerpts from my conversations:\n\n${excerpts}` : 'No transcript excerpts matched.'}${record ? `\n\nMy study record:\n${record}` : ''}\n\nQuestion: ${question}`,
             maxTokens: 700,
             temperature: 0.3,
           })
         : "I couldn't find anything about that in your conversations yet.";
-      if (!top.length) this.send({ streamId, delta: text });
+      if (!top.length && !record) this.send({ streamId, delta: text });
       const reply: ChatMsg = { id: uid(), role: 'assistant', text, at: Date.now(), sources };
       this.lib.saveAskHistory([...past, userMsg, reply]);
       this.send({ streamId, done: true });

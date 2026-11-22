@@ -29,6 +29,11 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
          the section (or subsection) is fetched, and its official current wording is shown under "Official text", kept
          apart from "Lecturer said". Not found / wrong section numbers are flagged; offline gives "Not checked yet" with
          a re-check button (src/main/legislation.ts, tests/legislation.test.ts with real fixtures; live run verified s 2)
+   - [x] Topic outlines: on the Revision page, "Outline" on any topic (or type any topic) gives an exam-ready outline:
+         rules and elements, authorities, distinctions, a problem-question checklist and gaps, cited [lecture, m:ss],
+         from lecture material only; topics no lecture covers are refused without an AI call; saved until rewritten
+   - [x] Ask Hark across all lectures also reads the revision record and case bank when asked about progress or
+         cases ("which topics have I not revised recently?", "what cases have I studied on X?") (live runs)
    - [x] Research tutor mode quotes official statute text from legislation.gov.uk with its link (live run, s 2(2))
    - [x] Case bank across lectures
 4. Revision pack
@@ -54,6 +59,7 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
          sidebar "Archived"), Revision and Case bank filtered by module folder (scratch live test 9/9)
 
 ## How it was tested (22 Nov)
+- Full regression after this round: unit 40/40, recover 3/3, mini 4/4, email 8/8, groq 13/13, phone 20/20, UI tour passes.
 - Unit tests (tests/unit.test.ts): emphasis cues, case-name and statute detection on speech-to-text spellings,
   name checking, practice/topic status/session picking, Anki export.
 - Live, real Groq, real transcription: a 2.7-minute synthetic contract-law lecture (scratch, not committed) imported,
@@ -66,9 +72,8 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 - tests/recover.mjs (crash recovery), tests/email.mjs, tests/groq.mjs, tests/phone.mjs still pass.
 
 ## Known limits / next tasks
-- Exact next task: revision outlines: for any topic on the Revision page, an exam-ready outline and checklist built
-  from every lecture on that topic (with lecture/timestamp citations).
-- Then: Ask Hark answers questions about revision progress ("which topics have I not revised recently?").
+- Exact next task: citations in outlines and Ask answers that name a lecture and time ([lecture, m:ss]) should be
+  clickable and open that moment (today only plain [m:ss] in a lecture's own notes is clickable).
 - Scanned PDFs (images only) are refused with a clear message: there is no OCR.
 - Groq free plan is ~8,000 tokens/minute per model: long lectures are analysed in parts with waits (minutes, not seconds).
 - "Research" tutor mode fetches statute text but has no general web search; other outside material is labelled "check this".
