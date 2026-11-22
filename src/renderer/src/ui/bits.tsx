@@ -84,8 +84,27 @@ export function Md({ text, onTime, sources, onSource }: { text: string; onTime?:
     blocks.push(list.ordered ? <ol key={blocks.length}>{items}</ol> : <ul key={blocks.length}>{items}</ul>);
     list = null;
   };
+  let table: string[][] | null = null;
+  const flushTable = () => {
+    if (!table) return;
+    const [head, ...rows] = table;
+    blocks.push(
+      <div key={blocks.length} className="md-table"><table><thead><tr>{head.map((c, i) => <th key={i}>{inline(c, `th${blocks.length}-${i}`)}</th>)}</tr></thead>
+        <tbody>{rows.map((r, ri) => <tr key={ri}>{r.map((c, ci) => <td key={ci}>{inline(c, `td${blocks.length}-${ri}-${ci}`)}</td>)}</tr>)}</tbody></table></div>,
+    );
+    table = null;
+  };
   for (const raw of text.split('\n')) {
     const line = raw.trimEnd();
+    // Simple markdown tables: | a | b |, with an optional |---|---| divider.
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      flush();
+      const cells = line.trim().slice(1, -1).split('|').map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      (table ??= []).push(cells);
+      continue;
+    }
+    flushTable();
     const li = line.match(/^\s*(?:([-*•])|(\d+)[.)])\s+(.*)$/);
     if (li) {
       const ordered = !!li[2];
@@ -98,11 +117,18 @@ export function Md({ text, onTime, sources, onSource }: { text: string; onTime?:
     }
     flush();
     if (!line.trim()) continue;
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    if (quote) {
+      blocks.push(<p key={blocks.length} className="md-quote">{inline(quote[1], `q${blocks.length}`)}</p>);
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(line)) continue;
     const h = line.match(/^#{1,4}\s+(.*)$/);
     if (h) blocks.push(<p key={blocks.length} className="md-h">{inline(h[1], `h${blocks.length}`)}</p>);
     else blocks.push(<p key={blocks.length}>{inline(line, `p${blocks.length}`)}</p>);
   }
   flush();
+  flushTable();
   return <div className="md">{blocks}</div>;
 }
 

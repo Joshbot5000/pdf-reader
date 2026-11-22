@@ -3,7 +3,20 @@ import type { Library, VectorChunk } from './store';
 import { chunkForIndex, fmtTime, parseTime, roughTokens, transcriptForLLM } from '../shared/text';
 import { parseNameHints, parseSummary, summaryInstruction, summarySystem } from '../shared/summaryFormat';
 import { uid } from '../shared/types';
-import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId } from '../shared/types';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId, TutorMode } from '../shared/types';
+
+const MODE_RULES: Record<TutorMode, string> = {
+  law: 'Explain accurately at the level of a UK law conversion course (England and Wales): precise terminology, the rule, its elements and the authority for it.',
+  explain: 'Explain like a patient tutor to a beginner: plain English, short sentences, one everyday example, legal terms explained as you go.',
+  exam: 'Focus on exam technique: how the point would be examined, the issues to spot, how to apply the rule to facts (IRAC), and common mistakes. Offer a short example question when useful.',
+  socratic: 'Teach Socratically: do not give the answer straight away. Ask one or two guiding questions that lead the student to it, then confirm or correct their reasoning when they reply.',
+  case: 'Explain cases through their facts, the legal issue, the decision and the principle (ratio), and why the case matters for this topic.',
+  compare: 'Compare the concepts, cases or tests side by side: what they share, how they differ, and when each applies. Use short parallel bullet points.',
+  lecture: 'Answer ONLY from the lecture material below. If the answer is not there, say exactly: "Your lectures don\'t cover that." Do not add outside knowledge.',
+  research: 'You may go beyond the lecture using your general knowledge of English law. Clearly separate "From your lecture:" and "Beyond the lecture (check this):". Never invent case names, citations or section numbers: if unsure, say so and suggest where to check (legislation.gov.uk for statutes, BAILII or a law report for cases).',
+};
 
 export type LlmApi = {
   generate(p: { streamId: string; system: string; history?: { role: 'user' | 'assistant'; text: string }[]; prompt: string; maxTokens?: number; temperature?: number; prefix?: string; tier?: 'strong' | 'fast'; json?: boolean }): Promise<string>;
@@ -208,10 +221,10 @@ export class Intelligence {
   }
 
   /** Chat about one conversation. The whole transcript goes in when it fits; otherwise the most relevant passages. */
-  async chat(meetingId: string, question: string, streamId: string): Promise<ChatMsg> {
+  async chat(meetingId: string, question: string, streamId: string, mode: TutorMode = 'law', passage?: { text: string; t: number }): Promise<ChatMsg> {
     const m = this.lib.get(meetingId);
     const paras = this.lib.transcript(meetingId);
-    const userMsg: ChatMsg = { id: uid(), role: 'user', text: question, at: Date.now() };
+    const userMsg: ChatMsg = { id: uid(), role: 'user', text: passage ? `“${passage.text.slice(0, 180)}${passage.text.length > 180 ? '…' : ''}” [${fmtTime(passage.t)}]\n\n${question}` : question, at: Date.now() };
     const history = m.chat.slice(-6).map((c) => ({ role: c.role, text: c.text }));
     const ctx = await this.llm.contextSize();
     const budget = ctx - 900 - roughTokens(history.map((h) => h.text).join(' ')) - 300;
@@ -225,9 +238,28 @@ export class Intelligence {
       const picked = top.filter((t) => (used += roughTokens(t.chunk.text)) < budget - 400).sort((a, b) => a.chunk.s - b.chunk.s);
       material = `${m.summary?.overview ? `Summary: ${m.summary.overview}\n\n` : ''}Most relevant excerpts from the transcript:\n${picked.map((t) => `[${fmtTime(t.chunk.s)}] ${t.chunk.text}`).join('\n---\n')}`;
     }
-    const system = `You are Hark, an assistant that answers questions about one recorded conversation titled "${m.title}". Answer only from the material below. When you rely on a moment, cite its timestamp in square brackets like [1:27]. If the answer is not there, say so plainly. Be direct and brief; use short bullet points for lists.\n\n${material}`;
+    // What this lecture's study pack found (cases and their principles), a short and checked summary.
+    let found = '';
     try {
-      const text = await this.llm.generate({ streamId, system, history, prompt: question, maxTokens: 700, temperature: 0.3 });
+      const pack = JSON.parse(fs.readFileSync(path.join(this.lib.folder(meetingId), 'study.json'), 'utf8'));
+      const cases = (pack.legal?.cases ?? []).filter((c: { found: boolean }) => c.found).map((c: { name: string; principle: string }) => `- ${c.name}: ${c.principle}`).join('\n');
+      if (cases) found = `\n\nCases discussed in this lecture:\n${cases}`;
+    } catch {
+      /* no study pack yet */
+    }
+    // Comparing with other lectures: bring in the most relevant passages from them, with where they came from.
+    let others = '';
+    if (mode === 'compare' || /\b(previous|last|earlier|other|another|next) (lecture|week|session|class)|\bother lectures\b|\bcompare\b/i.test(question)) {
+      const ids = this.lib.list().filter((x) => x.id !== meetingId && x.status === 'ready').map((x) => x.id);
+      if (ids.length) {
+        const hits = await this.retrieve(question, ids, 6).catch(() => []);
+        if (hits.length) others = `\n\nFrom your other lectures (cite as [lecture title, m:ss]):\n${hits.map((h) => `[${this.lib.get(h.meetingId).title}, ${fmtTime(h.chunk.s)}] ${h.chunk.text}`).join('\n---\n')}`;
+      }
+    }
+    const focus = passage ? `\n\nThe student is asking about this passage, said at [${fmtTime(passage.t)}]:\n"${passage.text.slice(0, 1500)}"` : '';
+    const system = `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}\nGround your answer in the lecture material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${others}${focus}`;
+    try {
+      const text = await this.llm.generate({ streamId, system, history, prompt: question, maxTokens: mode === 'exam' || mode === 'compare' ? 1000 : 750, temperature: mode === 'socratic' || mode === 'explain' ? 0.5 : 0.3, tier: 'strong' });
       const reply: ChatMsg = { id: uid(), role: 'assistant', text, at: Date.now() };
       this.lib.update(meetingId, { chat: [...this.lib.get(meetingId).chat, userMsg, reply] });
       this.send({ streamId, done: true });

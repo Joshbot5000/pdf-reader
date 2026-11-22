@@ -1,6 +1,6 @@
 /** Everything the window can ask the main process to do. */
 import type { CaseRef, Difficulty, NoteStyle, Practice, StudyPack, TopicRow } from './law';
-import type { ChatMsg, DownloadState, ParaTag, EngineStatus, LiveEvent, Meeting, ModelInfo, Para, PhoneInfo, SearchHit, Settings, StreamEvent, Summary, TemplateId, Voice } from './types';
+import type { ChatMsg, DownloadState, ParaTag, TutorMode, EngineStatus, LiveEvent, Meeting, ModelInfo, Para, PhoneInfo, SearchHit, Settings, StreamEvent, Summary, TemplateId, Voice } from './types';
 
 export type Api = {
   boot(): Promise<{ settings: Settings; meetings: Meeting[]; models: ModelInfo[]; status: EngineStatus; downloads: DownloadState[]; platform: string; version: string; ask: ChatMsg[] }>;
@@ -26,7 +26,7 @@ export type Api = {
   importSample(): Promise<Meeting>;
 
   summarize(id: string, streamId: string, template?: TemplateId): Promise<void>;
-  chat(id: string, question: string, streamId: string): Promise<ChatMsg>;
+  chat(id: string, question: string, streamId: string, mode?: TutorMode, passage?: { text: string; t: number }): Promise<ChatMsg>;
   clearChat(id: string): Promise<Meeting>;
   ask(question: string, streamId: string): Promise<ChatMsg>;
   clearAsk(): Promise<void>;

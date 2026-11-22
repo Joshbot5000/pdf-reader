@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AudioLines, Check, CircleAlert, FolderPlus, Folder, Home as HomeIcon, ListChecks, Mic, Moon, Search, Settings as Cog, Sparkles, Star, Sun, Upload, X } from 'lucide-react';
+import { AudioLines, GraduationCap, Scale, Check, CircleAlert, FolderPlus, Folder, Home as HomeIcon, ListChecks, Mic, Moon, Search, Settings as Cog, Sparkles, Star, Sun, Upload, X } from 'lucide-react';
 import { api } from './api';
 import { boot, get, go, run, saveSettings, set, toast, useStore, type View } from './store';
 import { startRecording, stopRecording } from './recorder';
@@ -10,6 +10,7 @@ import { Recorder } from './views/Recorder';
 import { MeetingView } from './views/MeetingView';
 import { Ask } from './views/Ask';
 import { Tasks } from './views/Tasks';
+import { CasesView, ReviseView } from './views/Revise';
 import { Settings } from './views/Settings';
 import { Onboarding } from './views/Onboarding';
 import { dayLabel } from './ui/bits';
@@ -33,6 +34,8 @@ function useTheme(): void {
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, [theme]);
+  const scale = useStore((s) => s.settings.readScale);
+  useEffect(() => void document.documentElement.style.setProperty('--read-scale', String(scale || 1)), [scale]);
 }
 
 export function App() {
@@ -106,6 +109,8 @@ export function App() {
             {view.name === 'meeting' && <MeetingView id={view.id} at={view.t} tab={view.tab} />}
             {view.name === 'ask' && <Ask />}
             {view.name === 'tasks' && <Tasks />}
+            {view.name === 'revise' && <ReviseView />}
+            {view.name === 'cases' && <CasesView />}
           </main>
           {palette && <Palette />}
           {settingsOpen && <Settings />}
@@ -139,7 +144,7 @@ function EngineStatus() {
   const status = useStore((s) => s.status);
   const downloads = useStore((s) => s.downloads);
   const dl = Object.values(downloads).filter((d) => !d.error);
-  let label = 'On-device AI ready', tone = 'ok', sub = status.gpu === 'metal' ? 'Running on Apple GPU' : 'Private, offline';
+  let label = status.cloud ? 'Notes by Groq' : 'On-device AI ready', tone = 'ok', sub = status.cloud ? 'Transcripts stay on this Mac' : status.gpu === 'metal' ? 'Running on Apple GPU' : 'Private, offline';
   if (dl.length) {
     const got = dl.reduce((n, d) => n + d.received, 0), total = dl.reduce((n, d) => n + d.total, 0);
     label = `Downloading AI ${Math.round((got / Math.max(1, total)) * 100)}%`;
@@ -195,6 +200,12 @@ function Sidebar() {
         </button>
         <button className={is({ name: 'ask' }) ? 'on' : ''} onClick={() => go({ name: 'ask' })}>
           <Sparkles size={16} /> Ask Hark <kbd>⌘J</kbd>
+        </button>
+        <button className={is({ name: 'revise' }) ? 'on' : ''} onClick={() => go({ name: 'revise' })}>
+          <GraduationCap size={16} /> Revision
+        </button>
+        <button className={is({ name: 'cases' }) ? 'on' : ''} onClick={() => go({ name: 'cases' })}>
+          <Scale size={16} /> Case bank
         </button>
         <button className={is({ name: 'tasks' }) ? 'on' : ''} onClick={() => go({ name: 'tasks' })}>
           <ListChecks size={16} /> Action items <span className="count">{open || ''}</span>

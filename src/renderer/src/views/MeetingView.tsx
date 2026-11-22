@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, BarChart3, CalendarClock, Captions, Check, ChevronLeft, Copy, Download, FileAudio, FileText, Folder, Highlighter, ListChecks, MessageCircle, NotebookPen, Pause, Pencil, Play, RotateCcw, RotateCw, Search, Sparkles, Square, Star, StickyNote, Trash2, UserRound, X } from 'lucide-react';
+import { ArrowUp, BarChart3, Bookmark, CalendarClock, Captions, Check, ChevronLeft, Copy, Download, FileAudio, FileText, Folder, Highlighter, ListChecks, MessageCircle, NotebookPen, Pause, Pencil, Play, RotateCcw, RotateCw, Search, Sparkles, Square, Star, StickyNote, Trash2, UserRound, X } from 'lucide-react';
 import { api } from '../api';
 import { clearStream, go, loadTranscript, run, set, startStream, toast, useStore } from '../store';
 import { Avatar, Md, Popover, Spinner, Waveform, colorOf, dayLabel, clock } from '../ui/bits';
@@ -7,11 +7,13 @@ import { TemplatePicker } from './Home';
 import { toggleAction } from './Tasks';
 import { fmtDuration, fmtTime, toMarkdown, toText } from '../../../shared/text';
 import { TEMPLATES, parseSummary } from '../../../shared/summaryFormat';
-import { Mail } from 'lucide-react';
-import type { Meeting, Para, Speaker, Summary, TemplateId } from '../../../shared/types';
+import { GraduationCap, Mail } from 'lucide-react';
+import { StudyTab } from './Study';
+import { PARA_TAGS, TUTOR_MODES } from '../../../shared/types';
+import type { Meeting, Para, ParaTag, Speaker, Summary, TemplateId, TutorMode } from '../../../shared/types';
 
 type Seek = (t: number, play?: boolean) => void;
-type Tab = 'summary' | 'chat' | 'notes' | 'insights';
+type Tab = 'summary' | 'study' | 'chat' | 'notes' | 'insights';
 
 export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: number; tab?: string }) {
   const m = useStore((s) => s.meetings.find((x) => x.id === id));
@@ -21,6 +23,13 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
   const progress = useStore((s) => s.progress[id]);
   const folders = useStore((s) => s.settings.folders);
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || 'summary');
+  // A passage selected in the transcript, to ask the tutor about.
+  const [passage, setPassage] = useState<{ text: string; t: number } | null>(null);
+  const [sel, setSel] = useState<{ text: string; t: number; x: number; y: number } | null>(null);
+  // The side panel can be widened for long notes; its width is remembered.
+  const [side, setSide] = useState(() => Number(localStorage.getItem('hark.side')) || 420);
+  const sideRef = useRef(side);
+  sideRef.current = side;
   const [playing, setPlaying] = useState(false);
   const [rate, setRate] = useState(1);
   const [now, setNow] = useState(0);
@@ -207,7 +216,7 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
         </div>
       )}
 
-      <div className="m-body">
+      <div className="m-body" style={{ ['--side' as string]: `${side}px` }}>
         <section className="m-transcript">
           {busy && (
             <div className="banner">
@@ -216,7 +225,23 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
             </div>
           )}
           {m.status === 'error' && <div className="banner err"><b>Something went wrong.</b> {m.error} <button className="btn small" onClick={() => void run(api.deleteMeeting(id))}>Delete</button></div>}
-          <div className="feed" ref={feed} onWheel={() => (follow.current = Date.now() + 4000)} onClick={(e) => {
+          {sel && (
+            <div className="sel-pop" style={{ left: sel.x, top: sel.y }} onMouseDown={(e) => e.preventDefault()}>
+              <button onClick={() => (setPassage({ text: sel.text, t: sel.t }), setTab('chat'), setSel(null))}><MessageCircle size={13} /> Ask about this</button>
+              {canPlay && <button onClick={() => (seek(sel.t, true), setSel(null))}><Play size={13} /> Play from here</button>}
+              <button onClick={() => void navigator.clipboard.writeText(sel.text).then(() => (toast('Copied', 'ok'), setSel(null)))}><Copy size={13} /></button>
+            </div>
+          )}
+          <div className="feed" ref={feed} onWheel={() => (follow.current = Date.now() + 4000, setSel(null))} onMouseUp={() => {
+            // Selecting text offers to ask the tutor about it, or to replay it.
+            const s = document.getSelection();
+            const text = s?.toString().replace(/\s+/g, ' ').trim() ?? '';
+            if (!s || text.length < 12 || s.isCollapsed || (s.anchorNode && (s.anchorNode.parentElement?.closest('[contenteditable="true"]')))) return setSel(null);
+            const el = (s.anchorNode?.parentElement)?.closest<HTMLElement>('.w') ?? (s.anchorNode?.parentElement)?.closest<HTMLElement>('[data-para-at]');
+            const t = el ? +(el.dataset.s ?? el.dataset.paraAt ?? 0) : 0;
+            const r = s.getRangeAt(0).getBoundingClientRect(), box = feed.current!.getBoundingClientRect();
+            setSel({ text, t, x: Math.max(8, r.left - box.left), y: r.top - box.top + feed.current!.scrollTop - 44 });
+          }} onClick={(e) => {
             const w = (e.target as HTMLElement).closest<HTMLElement>('.w');
             if (w && !(e.target as HTMLElement).closest('[contenteditable="true"]')) seek(+w.dataset.s!, canPlay);
           }}>
@@ -242,15 +267,24 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
         </section>
 
         <aside className="m-side">
+          <div className="side-grip" title="Drag to resize" onPointerDown={(e) => {
+            const x0 = e.clientX, w0 = side;
+            const move = (ev: PointerEvent) => setSide(Math.max(320, Math.min(900, w0 + (x0 - ev.clientX))));
+            const up = () => (window.removeEventListener('pointermove', move), window.removeEventListener('pointerup', up), localStorage.setItem('hark.side', String(sideRef.current)));
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+          }} />
           <div className="tabs">
             <button className={tab === 'summary' ? 'on' : ''} onClick={() => setTab('summary')}><Sparkles size={14} /> Notes</button>
+            <button className={tab === 'study' ? 'on' : ''} onClick={() => setTab('study')}><GraduationCap size={14} /> Study</button>
             <button className={tab === 'chat' ? 'on' : ''} onClick={() => setTab('chat')}><MessageCircle size={14} /> Chat</button>
             <button className={tab === 'notes' ? 'on' : ''} onClick={() => setTab('notes')}><NotebookPen size={14} /> Mine</button>
             <button className={tab === 'insights' ? 'on' : ''} onClick={() => setTab('insights')}><BarChart3 size={14} /> Insights</button>
           </div>
           <div className="tab-body">
             {tab === 'summary' && <SummaryTab m={m} seek={seek} hasText={!!paras?.length} />}
-            {tab === 'chat' && <ChatTab m={m} seek={seek} />}
+            {tab === 'study' && <StudyTab m={m} seek={seek} />}
+            {tab === 'chat' && <ChatTab m={m} seek={seek} passage={passage} clearPassage={() => setPassage(null)} />}
             {tab === 'notes' && <NotesTab m={m} />}
             {tab === 'insights' && <InsightsTab m={m} paras={paras ?? []} speakers={speakers} seek={seek} />}
           </div>
@@ -305,9 +339,18 @@ const Turn = memo(function Turn({ p, m, speakers, find, seek, editable }: { p: P
             {(close) => <SpeakerMenu m={m} p={p} sp={sp} speakers={speakers} close={close} apply={apply} />}
           </Popover>
           <button className="stamp mono" onClick={() => seek(p.s, m.hasAudio)}>{fmtTime(p.s)}</button>
+          {p.tag && <span className={`para-tag ${p.tag}`}>{PARA_TAGS[p.tag]}</span>}
           {editable && (
             <span className="turn-tools">
               <button title="Highlight" className={p.hl ? 'on' : ''} onClick={() => apply(api.updatePara(m.id, p.id, { hl: !p.hl }))}><Highlighter size={13} /></button>
+              <Popover align="right" trigger={(_o, t) => <button title="Bookmark as…" className={p.tag ? 'on' : ''} onClick={t}><Bookmark size={13} /></button>}>
+                {(close) => (
+                  <div className="menu">
+                    <p className="menu-label">Bookmark as…</p>
+                    {(Object.keys(PARA_TAGS) as ParaTag[]).map((k) => <button key={k} onClick={() => (close(), apply(api.updatePara(m.id, p.id, { tag: p.tag === k ? null : k })))}><span className={`tag-dot ${k}`} /> {PARA_TAGS[k]}{p.tag === k && <Check size={13} />}</button>)}
+                  </div>
+                )}
+              </Popover>
               <button title="Add a note" className={p.note ? 'on' : ''} onClick={() => setNoting(true)}><StickyNote size={13} /></button>
               <button title="Edit text" onClick={() => setEditing(true)}><Pencil size={13} /></button>
               <button title="Copy" onClick={() => void api.copyText(p.text).then(() => toast('Copied', 'ok'))}><Copy size={13} /></button>
@@ -498,7 +541,9 @@ function EmailState({ m }: { m: Meeting }) {
   );
 }
 
-function ChatTab({ m, seek }: { m: Meeting; seek: Seek }) {
+function ChatTab({ m, seek, passage, clearPassage }: { m: Meeting; seek: Seek; passage: { text: string; t: number } | null; clearPassage: () => void }) {
+  const [mode, setMode] = useState<TutorMode>(() => (localStorage.getItem('hark.tutor') as TutorMode) || 'law');
+  const pickMode = (x: TutorMode) => (setMode(x), localStorage.setItem('hark.tutor', x));
   const sid = `chat:${m.id}`;
   const stream = useStore((s) => s.streams[sid]);
   const llm = useStore((s) => s.status.llm);
@@ -516,7 +561,8 @@ function ChatTab({ m, seek }: { m: Meeting; seek: Seek }) {
     setPending(text);
     startStream(sid);
     try {
-      await api.chat(m.id, text, sid);
+      await api.chat(m.id, text, sid, mode, passage ?? undefined);
+      clearPassage();
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), 'error');
     } finally {
@@ -540,6 +586,13 @@ function ChatTab({ m, seek }: { m: Meeting; seek: Seek }) {
         <div ref={end} />
       </div>
       {!!m.chat.length && !pending && <button className="clear-chat" onClick={() => void run(api.clearChat(m.id))}>Clear chat</button>}
+      <div className="tutor-bar">
+        <select value={mode} onChange={(e) => pickMode(e.target.value as TutorMode)} title={TUTOR_MODES[mode].blurb}>
+          {(Object.keys(TUTOR_MODES) as TutorMode[]).map((k) => <option key={k} value={k}>{TUTOR_MODES[k].name}</option>)}
+        </select>
+        <span className="dim small">{TUTOR_MODES[mode].blurb}</span>
+      </div>
+      {passage && <div className="passage"><span className="grow">“{passage.text.slice(0, 200)}{passage.text.length > 200 ? '…' : ''}” <span className="mono dim">{fmtTime(passage.t)}</span></span><button className="icon-btn" onClick={clearPassage}><X size={13} /></button></div>}
       <div className="composer">
         <textarea rows={1} value={q} placeholder={llm === 'missing' ? 'Needs an AI model (Settings)' : 'Ask about this conversation…'} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(q); } }} />
         {pending ? <button className="send stop" onClick={() => void api.abort(sid)}><Square size={13} fill="currentColor" /></button> : <button className="send" disabled={!q.trim()} onClick={() => void send(q)}><ArrowUp size={16} /></button>}

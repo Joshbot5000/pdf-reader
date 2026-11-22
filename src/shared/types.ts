@@ -16,6 +16,18 @@ export type Para = {
   tag?: ParaTag;
 };
 
+export type TutorMode = 'explain' | 'law' | 'exam' | 'socratic' | 'case' | 'compare' | 'lecture' | 'research';
+export const TUTOR_MODES: Record<TutorMode, { name: string; blurb: string }> = {
+  law: { name: 'Law school', blurb: 'Accurate, at conversion-course level' },
+  explain: { name: 'Explain simply', blurb: 'Plain English and everyday examples' },
+  exam: { name: 'Exam', blurb: 'Application, issue spotting, technique' },
+  socratic: { name: 'Socratic', blurb: 'Teaches through questions' },
+  case: { name: 'Cases', blurb: 'Facts, issue, decision, principle' },
+  compare: { name: 'Compare', blurb: 'Doctrines, cases, tests side by side' },
+  lecture: { name: 'Lecture only', blurb: 'Only what your lectures say' },
+  research: { name: 'Beyond the lecture', blurb: 'Wider legal knowledge, clearly labelled' },
+};
+
 export type ParaTag = 'important' | 'confusing' | 'exam' | 'followup';
 export const PARA_TAGS: Record<ParaTag, string> = { important: 'Important', confusing: 'Confusing', exam: 'Exam focus', followup: 'Follow up' };
 
@@ -116,6 +128,8 @@ export type Settings = {
   aiEngine: 'auto' | 'local';
   /** After a lecture is transcribed, find its cases, statutes and exam points and write detailed notes automatically. */
   autoStudy: boolean;
+  /** Reading size for transcripts and notes (1 = normal). */
+  readScale: number;
 };
 
 export type ModelKind = 'asr' | 'llm' | 'support';
@@ -176,6 +190,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notify: true,
   aiEngine: 'auto',
   autoStudy: true,
+  readScale: 1,
 };
 
 export const LANGUAGES: [string, string][] = [

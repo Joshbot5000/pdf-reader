@@ -146,7 +146,7 @@ export class Study {
         const raw = await this.llm.generate({
           streamId: `${streamId}:part${i}`, tier: 'strong', temperature: 0.1, maxTokens: 1600, json: true,
           system: FAITHFUL,
-          prompt: `Lecture transcript${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ''}:\n${parts[i]}\n\nReturn JSON only, in exactly this shape:\n{"cases":[{"name":"case name as said, e.g. Carlill v Carbolic Smoke Ball Co","facts":"","issue":"","judgment":"","principle":"the ratio as the lecturer explained it","why":"why the lecturer mentioned it","time":"m:ss when first mentioned","uncertain":"anything doubtful, or empty"}],"legislation":[{"name":"full Act name with year if said","section":"e.g. 2(1), or empty","said":"what the lecturer said about it","time":"m:ss"}],"exam_points":[{"point":"material likely to matter in an exam even though the lecturer did not flag it explicitly","time":"m:ss"}],"topics":["2 to 6 short topic names, e.g. Offer and acceptance"]}\n\nOnly include cases and legislation actually mentioned in this transcript. Use only what the lecture says for facts and principles; if the lecture does not give the facts, write "Not explained in the lecture". Leave arrays empty if there are none.`,
+          prompt: `Lecture transcript${parts.length > 1 ? ` (part ${i + 1} of ${parts.length})` : ''}:\n${parts[i]}\n\nReturn JSON only, in exactly this shape:\n{"cases":[{"name":"case name as said, e.g. Carlill v Carbolic Smoke Ball Co","facts":"","issue":"","judgment":"","principle":"the ratio as the lecturer explained it","why":"why the lecturer mentioned it","time":"m:ss when first mentioned","uncertain":"anything doubtful, or empty"}],"legislation":[{"name":"full Act name with year if said","section":"e.g. 2(1), or empty","said":"what the lecturer said about it","time":"m:ss"}],"exam_points":[{"point":"material likely to matter in an exam even though the lecturer did not flag it explicitly","time":"m:ss"}],"topics":["2 to 6 short topic names, e.g. Offer and acceptance"]}\n\nOnly include cases and legislation actually mentioned in this transcript. Case names are often split across lines or misheard by speech-to-text (e.g. "Hyde v." then "wrench" on the next line): give your best reading of the full name and add "[check]" after it. Use only what the lecture says for facts and principles; if the lecture does not give the facts, write "Not explained in the lecture". Leave arrays empty if there are none.`,
         });
         this.check(streamId);
         const j = parseJson<Raw>(raw) ?? {};
@@ -189,6 +189,8 @@ export class Study {
       };
       for (const l of found.legislation!) addLaw(String(l.name ?? '').trim(), l.section ? String(l.section).replace(/^s\.?\s*/i, '') : undefined, String(l.said ?? ''), time(l.time));
       for (const h of findLegislation(paras)) addLaw(h.name, h.section, '', h.t);
+      // A section listed on its own is redundant when a subsection of it is listed with the lecturer's words.
+      for (let i = laws.length - 1; i >= 0; i--) if (laws[i].section && !laws[i].said && laws.some((x) => x !== laws[i] && norm(x.name) === norm(laws[i].name) && x.section?.startsWith(`${laws[i].section}(`))) laws.splice(i, 1);
       // An Act listed on its own is redundant once its sections are listed.
       for (let i = laws.length - 1; i >= 0; i--) if (!laws[i].section && laws.some((x) => x.section && norm(x.name) === norm(laws[i].name))) laws.splice(i, 1);
       // Emphasis: the lecturer's own words first, then what the AI thinks is exam-worthy.
@@ -216,6 +218,9 @@ export class Study {
   async revision(id: string, kind: 'cards' | 'sbaqs' | 'shortQs' | 'problems', opts: { count: number; difficulty: Difficulty }, streamId: string): Promise<StudyPack> {
     try {
       const material = await this.material(id, streamId);
+      // Questions are filed under the lecture's own topics, so the knowledge-gap tracker sees a few meaningful topics rather than one per question.
+      const topics = this.get(id).legal?.topics ?? [];
+      const topicRule = topics.length ? `\nFor "topic", use exactly one of: ${topics.map((t) => `"${t}"`).join(', ')}.` : '\nFor "topic", use a broad topic name of 2-4 words (e.g. "Offer and acceptance"), the same for related questions.';
       const n = Math.max(1, Math.min(kind === 'problems' ? 3 : kind === 'sbaqs' ? 8 : 20, opts.count));
       const level = { easy: 'straightforward, testing core understanding', medium: 'at the standard of a law conversion course exam', hard: 'demanding, with close distinctions and tricky application' }[opts.difficulty];
       const ask: Record<typeof kind, string> = {
@@ -228,7 +233,7 @@ export class Study {
       const raw = await this.llm.generate({
         streamId, tier: kind === 'cards' || kind === 'shortQs' ? 'fast' : 'strong', temperature: 0.5, maxTokens: kind === 'problems' ? 1800 : 2200, json: true,
         system: `${FAITHFUL}\nWrite revision material only from the lecture content below. Use only cases and statutes that appear in it.`,
-        prompt: `${material}\n\n${ask[kind]}\nReturn JSON only.`,
+        prompt: `${material}\n\n${ask[kind]}${topicRule}\nReturn JSON only.`,
       });
       this.check(streamId);
       const j = parseJson<Record<string, unknown[]>>(raw) ?? {};

@@ -47,12 +47,13 @@ export type StudyPack = {
 
 /** Phrases lecturers use when something matters. Matched in the transcript itself, so these are never invented. */
 const CUES: [RegExp, string][] = [
-  [/\b(this|that|it) (is|'s) (really |very |extremely |absolutely )?(important|crucial|key|essential|vital|critical)\b/i, 'Important'],
-  [/\b(really |very )?important (point|thing|distinction|case|to (remember|note|understand))\b/i, 'Important'],
-  [/\b(please |do )?(remember|don'?t forget|make sure you (know|understand|remember))\b/i, 'Remember this'],
+  // Most specific first: "likely to come up in the exam, so make sure you understand it" is an exam cue.
   [/\b(likely|bound|going) to (come up|appear|be) (in|on) (the |your |an )?(exam|assessment|test)\b/i, 'Exam'],
   [/\b(exam|assessment) (question|tip|technique|favourite|favorite)s?\b/i, 'Exam'],
   [/\b(in|for) (the|your|an) exam\b/i, 'Exam'],
+  [/\b(this|that|it) (is|'s) (really |very |extremely |absolutely )?(important|crucial|key|essential|vital|critical)\b/i, 'Important'],
+  [/\b(really |very )?important (point|thing|distinction|case|to (remember|note|understand))\b/i, 'Important'],
+  [/\b(please |do )?(remember|don'?t forget|make sure you (know|understand|remember))\b/i, 'Remember this'],
   [/\b(a |the )?(common|classic|typical|frequent) (mistake|error|misconception|pitfall|trap)\b/i, 'Common mistake'],
   [/\bstudents (often|always|frequently|tend to) (get|confuse|mix|forget|miss)\b/i, 'Common mistake'],
   [/\b(the )?key (distinction|difference|point|question|issue|test|principle) (is|here)\b/i, 'Key distinction'],

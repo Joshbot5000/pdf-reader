@@ -75,6 +75,10 @@ export function Settings() {
               </label>
               <label className="field"><span>Write notes automatically<i>Summarise every conversation as soon as it is transcribed.</i></span><Toggle on={settings.autoSummary} set={(v) => void saveSettings({ autoSummary: v })} /></label>
               <label className="field"><span>Remember voices<i>When you name a speaker, recognise them in future conversations.</i></span><Toggle on={settings.rememberVoices} set={(v) => void saveSettings({ rememberVoices: v })} /></label>
+              <label className="field"><span>Text size<i>For transcripts and study notes.</i></span>
+                <div className="seg">{([[0.9, 'Small'], [1, 'Normal'], [1.15, 'Large'], [1.3, 'Larger']] as const).map(([v, l]) => <button key={v} className={settings.readScale === v ? 'on' : ''} onClick={(e) => (e.preventDefault(), void saveSettings({ readScale: v }))}>{l}</button>)}</div>
+              </label>
+              <label className="field"><span>Analyse lectures automatically<i>After a lecture is transcribed, find its cases, statutes and exam points and write full notes.</i></span><Toggle on={settings.autoStudy} set={(v) => void saveSettings({ autoStudy: v })} /></label>
               <MicPicker />
               <label className="field"><span>Record shortcut<i>Starts and stops a recording from any app. Shown in the menu bar while recording.</i></span><input defaultValue={settings.recordShortcut} placeholder="Off" spellCheck={false} onBlur={(e) => void saveSettings({ recordShortcut: e.target.value.trim() })} /></label>
               <label className="field"><span>Notifications<i>When a recording starts or stops, when notes are ready, and when an interrupted recording is rescued.</i></span><Toggle on={settings.notify} set={(v) => void saveSettings({ notify: v })} /></label>

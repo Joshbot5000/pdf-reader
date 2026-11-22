@@ -869,7 +869,7 @@ const api: Api = {
     stopped.delete(streamId);
     await intel.summarize(id, streamId, template);
   },
-  chat: (id, question, streamId) => intel.chat(id, question, streamId),
+  chat: (id, question, streamId, mode, passage) => intel.chat(id, question, streamId, mode, passage),
   clearChat: async (id) => lib.update(id, { chat: [] }),
   ask: (question, streamId) => intel.ask(question, streamId),
   clearAsk: async () => lib.saveAskHistory([]),
@@ -999,10 +999,23 @@ const api: Api = {
     for (const m of lib.list()) {
       const pack = study.get(m.id);
       const fallback = pack.legal?.topics[0] ?? m.title;
+      const lectureTopics = pack.legal?.topics ?? [];
+      // A question's own topic, folded into the closest of the lecture's topics (by shared words).
+      const fold = (t: string): string => {
+        if (!t || !lectureTopics.length) return t || fallback;
+        const words = (x: string) => new Set(x.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3).map((w) => w.replace(/s$/, '')));
+        const mine = words(t);
+        let best = '', score = 0;
+        for (const lt of lectureTopics) {
+          const n = [...words(lt)].filter((w) => mine.has(w)).length;
+          if (n > score) (score = n), (best = lt);
+        }
+        return lectureTopics.includes(t) ? t : best || fallback;
+      };
       const mine: RevisionItem[] = [
-        ...(pack.cards ?? []).map((c): RevisionItem => ({ key: `${m.id}:${c.id}`, kind: 'card', topic: c.topic || fallback, lectureId: m.id, lecture: m.title, front: c.front, back: c.back })),
-        ...(pack.sbaqs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'sbaq', topic: q.topic || fallback, lectureId: m.id, lecture: m.title, sbaq: q })),
-        ...(pack.shortQs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'short', topic: q.topic || fallback, lectureId: m.id, lecture: m.title, q: q.q, a: q.a })),
+        ...(pack.cards ?? []).map((c): RevisionItem => ({ key: `${m.id}:${c.id}`, kind: 'card', topic: fold(c.topic), lectureId: m.id, lecture: m.title, front: c.front, back: c.back })),
+        ...(pack.sbaqs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'sbaq', topic: fold(q.topic), lectureId: m.id, lecture: m.title, sbaq: q })),
+        ...(pack.shortQs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'short', topic: fold(q.topic), lectureId: m.id, lecture: m.title, q: q.q, a: q.a })),
       ];
       if (mine.length) lectures++;
       if (mine.length && !mine.some((x) => practice[x.key])) untested.push({ id: m.id, title: m.title });

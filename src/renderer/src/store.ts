@@ -7,6 +7,8 @@ export type View =
   | { name: 'home'; folder?: string; starred?: boolean }
   | { name: 'ask' }
   | { name: 'tasks' }
+  | { name: 'revise' }
+  | { name: 'cases' }
   | { name: 'record' }
   | { name: 'meeting'; id: string; t?: number; tab?: string };
 
