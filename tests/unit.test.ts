@@ -252,3 +252,65 @@ describe('phone link', async () => {
     server.close();
   });
 });
+
+import { ankiExport, explicitEmphasis, findCaseNames, findLegislation, locate, parseJson, pickSession, record, topicStatus, type Practice } from '../src/shared/law';
+describe('law lecture intelligence', () => {
+  const para = (id: string, s: number, text: string): Para => ({ id, sp: 'S1', s, e: s + 30, text, words: retime(text, s, s + 30) });
+  const lecture = [
+    para('a', 0, "Okay, today we look at offer and acceptance. The leading case is Carlill v Carbolic Smoke Ball Company, decided in 1893."),
+    para('b', 30, "This is really important: an advert is usually only an invitation to treat. A common mistake is to call every advert an offer."),
+    para('c', 60, "Compare Partridge versus Crittenden, where an advert for birds was an invitation to treat. Don't confuse this with a unilateral offer."),
+    para('d', 90, "Under section 2 of the Misrepresentation Act 1967 there is a statutory claim. Section 2(1) is likely to come up in the exam."),
+    para('e', 120, "We also touched on the Consumer Rights Act 2015. Tom and Jerry went to the shop."),
+  ];
+  it('finds what the lecturer emphasised, word for word, with the time', () => {
+    const e = explicitEmphasis(lecture);
+    expect(e.map((x) => x.cue)).toEqual(['Important', 'Common mistake', "Don't confuse", 'Exam']);
+    expect(e[0].t).toBeGreaterThanOrEqual(30);
+    expect(e.every((x) => x.kind === 'explicit')).toBe(true);
+  });
+  it('finds case names as speech-to-text writes them', () => {
+    const c = findCaseNames(lecture).map((x) => x.name);
+    expect(c).toContain('Carlill v Carbolic Smoke Ball Company');
+    expect(c).toContain('Partridge v Crittenden');
+    expect(c.some((x) => /Tom/.test(x))).toBe(false);
+  });
+  it('finds statutes and sections', () => {
+    const l = findLegislation(lecture);
+    expect(l.find((x) => x.section === '2')?.name).toBe('Misrepresentation Act 1967');
+    expect(l.find((x) => x.section === '2(1)')?.name).toBe('Misrepresentation Act 1967');
+    expect(l.some((x) => x.name === 'Consumer Rights Act 2015')).toBe(true);
+  });
+  it('checks names the AI gives against the transcript', () => {
+    expect(locate(lecture, 'Carlill v Carbolic Smoke Ball Co')).toBeGreaterThanOrEqual(0);
+    expect(locate(lecture, 'Fisher v Bell')).toBe(-1);
+    expect(parseJson<{ a: number }>('Here you go:\n```json\n{"a": 1}\n```')).toEqual({ a: 1 });
+  });
+  it('tracks practice, topics and what to revise next', () => {
+    const now = 1_800_000_000_000;
+    const p: Practice = {};
+    record(p, 'c1', false, 'Offer', 'L1', now);
+    record(p, 'c1', false, 'Offer', 'L1', now);
+    record(p, 'c2', true, 'Acceptance', 'L1', now);
+    record(p, 'c2', true, 'Acceptance', 'L1', now);
+    const items = [{ key: 'c1', topic: 'Offer', lecture: 'L1' }, { key: 'c2', topic: 'Acceptance', lecture: 'L1' }, { key: 'c3', topic: 'Consideration', lecture: 'L2' }];
+    const rows = topicStatus(items, p, { Acceptance: 2 }, now);
+    expect(rows.map((r) => `${r.topic}:${r.state}`)).toEqual(['Offer:needs', 'Acceptance:needs', 'Consideration:untested']);
+    expect(pickSession(items, p, new Set(['Offer']), 5, now + 864e5).map((x) => x.key)).toEqual(['c1', 'c3']);
+    expect(ankiExport([{ front: 'What is an offer?', back: 'A definite\npromise', topic: 'Offer & acceptance' }], 'Contract')).toBe('#separator:tab\n#html:true\n#deck:Contract\n#tags column:3\nWhat is an offer?\tA definite<br>promise\toffer_acceptance');
+  });
+});
+
+import { locateName } from '../src/shared/law';
+describe('case names as speech-to-text actually writes them', () => {
+  const t = 'In Fisher V-Bell, a shopkeeper displayed a flick knife. In Carlo V. Carbolic Smokeball Company, the company promised £100.';
+  const paras: Para[] = [{ id: 'x', sp: 'S1', s: 0, e: 20, text: t, words: retime(t, 0, 20) }];
+  it('finds them, and says when the spelling differs', () => {
+    expect(findCaseNames(paras).map((c) => c.name)).toEqual(['Fisher v Bell', 'Carlo v Carbolic Smokeball Company']);
+    expect(locateName(paras, 'Fisher v Bell')).toMatchObject({ exact: true });
+    const c = locateName(paras, 'Carlill v Carbolic Smoke Ball Co');
+    expect(c.t).toBeGreaterThan(5);
+    expect(c.exact).toBe(false);
+    expect(locateName(paras, 'Hyde v Wrench').t).toBe(-1);
+  });
+});

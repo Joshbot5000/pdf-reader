@@ -15,6 +15,9 @@ import QRCode from 'qrcode';
 import { lanAddresses, servePhone, type PhoneNotes, type PhoneServer, type UploadMeta } from './phone';
 import { PeakMeter } from '../shared/vad';
 import { CloudError, abortCloud, cloudGenerate, cloudModels } from './cloud';
+import { Study } from './study';
+import { ankiExport, pickSession, record, topicStatus, type Practice } from '../shared/law';
+import type { RevisionItem } from '../shared/api';
 import { roughTokens } from '../shared/text';
 import { checkGmail, notesEmail, sendGmail, sendWithMailApp, validEmail } from './mailer';
 import { uid } from '../shared/types';
@@ -221,9 +224,7 @@ if (lowMemory)
   }, Math.min(30e3, llmIdleMs)).unref();
 
 const stopped = new Set<string>();
-const intel = new Intelligence(
-  lib,
-  {
+const llmApi: ConstructorParameters<typeof Intelligence>[1] = {
     generate: async (p) => {
       if (useCloud()) {
         try {
@@ -255,11 +256,28 @@ const intel = new Intelligence(
     // Groq's free plan allows about 8,000 tokens a minute per model, so long lectures go in parts of that size.
     contextSize: async () => (useCloud() ? 6400 : (await ensureLlm()).contextSize),
     modelName: () => (useCloud() && cloudModel ? `Groq ${cloudModel.replace(/^.*\//, '')}` : entry(lib.settings().llmModel).name),
-  },
+};
+const intel = new Intelligence(
+  lib,
+  llmApi,
   { embedText: (texts) => speech.call('embedText', { texts }), available: () => models.installed('embed') },
   (e) => send('stream', e),
   (id) => stopped.has(id),
 );
+
+const study = new Study(lib, llmApi, (e) => send('stream', e), (id) => stopped.has(id));
+const practiceFile = path.join(dataDir, 'practice.json');
+const readPractice = (): Practice => {
+  try {
+    return JSON.parse(fs.readFileSync(practiceFile, 'utf8')) as Practice;
+  } catch {
+    return {};
+  }
+};
+const writePractice = (p: Practice): void => {
+  fs.writeFileSync(`${practiceFile}.tmp`, JSON.stringify(p));
+  fs.renameSync(`${practiceFile}.tmp`, practiceFile);
+};
 
 // ---------------------------------------------------------------- capture & import
 
@@ -330,6 +348,11 @@ async function afterTranscript(id: string): Promise<void> {
   // Emailing the notes needs notes, so it writes them even if automatic notes are switched off.
   if ((s.autoSummary || s.emailNotes) && canWrite() && m.words >= 25) {
     await intel.summarize(id, `sum:${id}`).catch(() => undefined);
+  }
+  // Lectures: find the cases, statutes and exam points, and write full notes, ready for revision.
+  if (s.autoStudy && lib.has(id) && lib.get(id).template === 'lecture' && canWrite() && lib.get(id).words >= 150) {
+    await study.legal(id, `legal:${id}`).catch(() => undefined);
+    if (lib.has(id) && !study.get(id).notes) await study.notes(id, 'detailed', `notes:${id}`).catch(() => undefined);
   }
   if (lib.has(id) && lib.get(id).summary && !win?.isFocused()) tell('Notes ready', `“${lib.get(id).title}” has been transcribed and written up.`);
   if (s.emailNotes && lib.has(id) && lib.get(id).summary) await emailNotes(id).catch(() => undefined);
@@ -728,6 +751,7 @@ const api: Api = {
     if (patch.hl !== undefined) p.hl = patch.hl || undefined;
     if (patch.note !== undefined) p.note = patch.note.trim() || undefined;
     if (patch.sp !== undefined) p.sp = patch.sp;
+    if (patch.tag !== undefined) p.tag = patch.tag || undefined;
     const kept = paras.filter((x) => x.text);
     lib.saveTranscript(id, kept);
     return kept;
@@ -954,6 +978,60 @@ const api: Api = {
       summary: { title: 'Test from Hark', overview: 'If you can read this, Hark will email you the notes from each conversation as soon as they are written.', keyPoints: ['Emailing notes is set up and working.'], actions: [], decisions: [], questions: [], chapters: [], topics: [], cards: [], template: 'meeting' },
     } as unknown as Meeting;
     await deliver(notesEmail(sample));
+  },
+  studyGet: async (id) => study.get(id),
+  studyNotes: (id, style, streamId) => (stopped.delete(streamId), study.notes(id, style, streamId)),
+  studyLegal: (id, streamId) => (stopped.delete(streamId), study.legal(id, streamId)),
+  studyRevision: (id, kind, opts, streamId) => (stopped.delete(streamId), study.revision(id, kind, opts, streamId)),
+  studySave: async (id, patch) => study.save(id, patch),
+  practice: async (key, right, topic, lectureId) => {
+    const p = readPractice();
+    record(p, key, right, topic, lectureId);
+    writePractice(p);
+  },
+  revisionOverview: async () => {
+    const practice = readPractice();
+    const items: RevisionItem[] = [];
+    const confusing: { meetingId: string; title: string; paraId: string; t: number; text: string }[] = [];
+    const confusedTopics: Record<string, number> = {};
+    const untested: { id: string; title: string }[] = [];
+    let lectures = 0;
+    for (const m of lib.list()) {
+      const pack = study.get(m.id);
+      const fallback = pack.legal?.topics[0] ?? m.title;
+      const mine: RevisionItem[] = [
+        ...(pack.cards ?? []).map((c): RevisionItem => ({ key: `${m.id}:${c.id}`, kind: 'card', topic: c.topic || fallback, lectureId: m.id, lecture: m.title, front: c.front, back: c.back })),
+        ...(pack.sbaqs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'sbaq', topic: q.topic || fallback, lectureId: m.id, lecture: m.title, sbaq: q })),
+        ...(pack.shortQs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'short', topic: q.topic || fallback, lectureId: m.id, lecture: m.title, q: q.q, a: q.a })),
+      ];
+      if (mine.length) lectures++;
+      if (mine.length && !mine.some((x) => practice[x.key])) untested.push({ id: m.id, title: m.title });
+      items.push(...mine);
+      for (const p of lib.transcript(m.id))
+        if (p.tag === 'confusing') {
+          confusing.push({ meetingId: m.id, title: m.title, paraId: p.id, t: p.s, text: p.text.slice(0, 220) });
+          confusedTopics[fallback] = (confusedTopics[fallback] ?? 0) + 1;
+        }
+    }
+    const topics = topicStatus(items, practice, confusedTopics);
+    const weak = new Set(topics.filter((t) => t.state === 'needs').map((t) => t.topic));
+    return { topics, session: pickSession(items, practice, weak, 15), practice, confusing, totals: { items: items.length, due: items.filter((x) => practice[x.key] && practice[x.key].due <= Date.now()).length, lectures, untestedLectures: untested } };
+  },
+  caseBank: async () => lib.list().flatMap((m) => (study.get(m.id).legal?.cases ?? []).map((c) => ({ c, meetingId: m.id, title: m.title, date: m.createdAt }))),
+  exportStudy: async (id, what) => {
+    if (what === 'all-anki') {
+      const cards = lib.list().flatMap((m) => (study.get(m.id).cards ?? []).map((c) => ({ ...c, topic: c.topic || m.title })));
+      if (!cards.length) throw new Error('There are no flashcards yet.');
+      return saveWithDialog('Hark flashcards', 'txt', (f) => fs.writeFileSync(f, ankiExport(cards, 'Hark')));
+    }
+    const m = lib.get(id);
+    const pack = study.get(id);
+    if (what === 'anki') {
+      if (!pack.cards?.length) throw new Error('This lecture has no flashcards yet.');
+      return saveWithDialog(`${m.title} flashcards`, 'txt', (f) => fs.writeFileSync(f, ankiExport(pack.cards!, `Hark::${m.title}`)));
+    }
+    if (!pack.notes) throw new Error('Write the notes first.');
+    return saveWithDialog(`${m.title} notes`, 'md', (f) => fs.writeFileSync(f, pack.notes!.text));
   },
   phoneInfo: async () => {
     const s = lib.settings();

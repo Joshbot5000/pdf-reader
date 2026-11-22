@@ -12,7 +12,12 @@ export type Para = {
   words: Word[];
   hl?: boolean;
   note?: string;
+  /** A bookmark category for this passage. */
+  tag?: ParaTag;
 };
+
+export type ParaTag = 'important' | 'confusing' | 'exam' | 'followup';
+export const PARA_TAGS: Record<ParaTag, string> = { important: 'Important', confusing: 'Confusing', exam: 'Exam focus', followup: 'Follow up' };
 
 export type Speaker = { id: string; name: string; color: number; voiceId?: string; named?: boolean };
 
@@ -109,6 +114,8 @@ export type Settings = {
   notify: boolean;
   /** Where the AI writing happens: Groq when a key is set and the Mac is online ('auto'), or only on this Mac. Transcription is always on this Mac. */
   aiEngine: 'auto' | 'local';
+  /** After a lecture is transcribed, find its cases, statutes and exam points and write detailed notes automatically. */
+  autoStudy: boolean;
 };
 
 export type ModelKind = 'asr' | 'llm' | 'support';
@@ -168,6 +175,7 @@ export const DEFAULT_SETTINGS: Settings = {
   recordShortcut: 'CommandOrControl+Shift+R',
   notify: true,
   aiEngine: 'auto',
+  autoStudy: true,
 };
 
 export const LANGUAGES: [string, string][] = [
