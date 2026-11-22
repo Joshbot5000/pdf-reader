@@ -6,7 +6,7 @@ import { uid } from '../shared/types';
 import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId } from '../shared/types';
 
 export type LlmApi = {
-  generate(p: { streamId: string; system: string; history?: { role: 'user' | 'assistant'; text: string }[]; prompt: string; maxTokens?: number; temperature?: number; prefix?: string }): Promise<string>;
+  generate(p: { streamId: string; system: string; history?: { role: 'user' | 'assistant'; text: string }[]; prompt: string; maxTokens?: number; temperature?: number; prefix?: string; tier?: 'strong' | 'fast'; json?: boolean }): Promise<string>;
   tokens(text: string): Promise<number>;
   contextSize(): Promise<number>;
   modelName(): string;

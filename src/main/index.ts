@@ -14,6 +14,8 @@ import { retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
 import QRCode from 'qrcode';
 import { lanAddresses, servePhone, type PhoneNotes, type PhoneServer, type UploadMeta } from './phone';
 import { PeakMeter } from '../shared/vad';
+import { CloudError, abortCloud, cloudGenerate, cloudModels } from './cloud';
+import { roughTokens } from '../shared/text';
 import { checkGmail, notesEmail, sendGmail, sendWithMailApp, validEmail } from './mailer';
 import { uid } from '../shared/types';
 import type { Api, Events } from '../shared/api';
@@ -133,7 +135,9 @@ function refreshStatus(patch: Partial<EngineStatus> = {}): void {
   else if (status.asr === 'missing') status.asr = 'idle';
   if (!models.installed(s.llmModel)) status.llm = 'missing';
   else if (status.llm === 'missing') status.llm = 'idle';
-  send('status', { ...status });
+  // Writing through Groq: notes and study tools work even without the model on this Mac.
+  const cloud = useCloud() && cloudModel ? cloudModel : undefined;
+  send('status', { ...status, cloud, ...(cloud && status.llm === 'missing' ? { llm: 'ready' as const } : {}) });
 }
 
 speech.onStart = async () => {
@@ -221,6 +225,19 @@ const intel = new Intelligence(
   lib,
   {
     generate: async (p) => {
+      if (useCloud()) {
+        try {
+          const out = await cloudGenerate(groqKey(), p, (delta) => send('stream', { streamId: p.streamId, delta }), (secs) => send('stream', { streamId: p.streamId.split(':')[0] + (p.streamId.includes(':') ? `:${p.streamId.split(':')[1]}` : ''), stage: `Groq's free plan is pacing requests: waiting ${secs} s` }));
+          cloudDown = '';
+          return out;
+        } catch (err) {
+          // Offline, or Groq unavailable: carry on with the model on this Mac, if there is one.
+          if (!(err instanceof CloudError) || !['network', 'other'].includes(err.kind) || err.message === 'Stopped' || !models.installed(lib.settings().llmModel)) throw err;
+          cloudDown = err.message;
+          cloudDownAt = Date.now();
+          refreshStatus();
+        }
+      }
       llmBusy++;
       try {
         await ensureLlm();
@@ -231,11 +248,13 @@ const intel = new Intelligence(
       }
     },
     tokens: async (text) => {
+      if (useCloud()) return roughTokens(text);
       await ensureLlm();
       return llm.call<number>('tokens', { text });
     },
-    contextSize: async () => (await ensureLlm()).contextSize,
-    modelName: () => entry(lib.settings().llmModel).name,
+    // Groq's free plan allows about 8,000 tokens a minute per model, so long lectures go in parts of that size.
+    contextSize: async () => (useCloud() ? 6400 : (await ensureLlm()).contextSize),
+    modelName: () => (useCloud() && cloudModel ? `Groq ${cloudModel.replace(/^.*\//, '')}` : entry(lib.settings().llmModel).name),
   },
   { embedText: (texts) => speech.call('embedText', { texts }), available: () => models.installed('embed') },
   (e) => send('stream', e),
@@ -309,7 +328,7 @@ async function afterTranscript(id: string): Promise<void> {
   const m = lib.get(id);
   const s = lib.settings();
   // Emailing the notes needs notes, so it writes them even if automatic notes are switched off.
-  if ((s.autoSummary || s.emailNotes) && models.installed(s.llmModel) && m.words >= 25) {
+  if ((s.autoSummary || s.emailNotes) && canWrite() && m.words >= 25) {
     await intel.summarize(id, `sum:${id}`).catch(() => undefined);
   }
   if (lib.has(id) && lib.get(id).summary && !win?.isFocused()) tell('Notes ready', `“${lib.get(id).title}” has been transcribed and written up.`);
@@ -317,6 +336,30 @@ async function afterTranscript(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------- email
+
+/** Use Groq for writing? Only when chosen, a key is set, and it has not just failed. */
+let cloudDown = '';
+let cloudModel = '';
+let cloudDownAt = 0;
+/** Can notes and study tools be written right now (through Groq, or the model on this Mac)? */
+const canWrite = (): boolean => useCloud() || models.installed(lib.settings().llmModel);
+const useCloud = (): boolean => {
+  if (lib.settings().aiEngine === 'local' || !groqKey()) return false;
+  // After a failure, try the cloud again a minute later rather than on every call.
+  if (cloudDown && Date.now() - cloudDownAt < 60e3) return false;
+  return true;
+};
+const checkCloud = async (): Promise<void> => {
+  if (lib.settings().aiEngine === 'local' || !groqKey()) return void (cloudModel = '');
+  try {
+    cloudModel = (await cloudModels(groqKey())).strong;
+    cloudDown = '';
+  } catch (err) {
+    cloudDown = (err as Error).message;
+    cloudDownAt = Date.now();
+  }
+  refreshStatus();
+};
 
 const groqFile = path.join(dataDir, 'groq.json');
 /** The Groq key the phone uses when the Mac is out of reach. Kept here so it reaches every paired phone. */
@@ -565,7 +608,7 @@ async function adoptPhone(m: Meeting, file: string, n: PhoneNotes): Promise<void
   await intel.index(m.id).catch(() => undefined);
   // No notes came with it (Groq could not write them): write them here as usual.
   const s = lib.settings();
-  if (!n.summary && (s.autoSummary || s.emailNotes) && models.installed(s.llmModel) && lib.get(m.id).words >= 25) await intel.summarize(m.id, `sum:${m.id}`).catch(() => undefined);
+  if (!n.summary && (s.autoSummary || s.emailNotes) && canWrite() && lib.get(m.id).words >= 25) await intel.summarize(m.id, `sum:${m.id}`).catch(() => undefined);
   if (s.emailNotes && lib.has(m.id) && lib.get(m.id).summary) await emailNotes(m.id).catch(() => undefined);
 }
 
@@ -626,7 +669,7 @@ async function startPhone(): Promise<void> {
         api: {
           boot: async () => ({
             meetings: lib.list(), status: { ...status }, ask: lib.askHistory(), version: app.getVersion(),
-            userName: lib.settings().userName, theme: lib.settings().theme, notes: models.installed(lib.settings().llmModel),
+            userName: lib.settings().userName, theme: lib.settings().theme, notes: canWrite(),
             groqKey: groqKey(), emailNotes: lib.settings().emailNotes, language: lib.settings().language,
           }),
           getTranscript: api.getTranscript, updateMeeting: api.updateMeeting, deleteMeeting: api.deleteMeeting, updatePara: api.updatePara,
@@ -812,6 +855,7 @@ const api: Api = {
   },
   abort: async (streamId) => {
     stopped.add(streamId);
+    abortCloud(streamId);
     if (llm.running) await llm.call('abort', { streamId }).catch(() => undefined);
   },
   search: async (q) => lib.search(q),
@@ -840,6 +884,7 @@ const api: Api = {
     const s = lib.saveSettings(patch);
     if (patch.theme) nativeTheme.themeSource = s.theme;
     if (patch.recordShortcut !== undefined) setShortcut(s.recordShortcut);
+    if (patch.aiEngine !== undefined) void checkCloud();
     if (patch.phone !== undefined) {
       if (s.phone) await startPhone();
       else stopPhone();
@@ -892,13 +937,14 @@ const api: Api = {
   emailStatus: async () => ({ hasPassword: !!mailPassword() }),
   saveGroqKey: async (key) => {
     const k = key.trim();
-    if (!k) return void fs.rmSync(groqFile, { force: true });
+    if (!k) return void (fs.rmSync(groqFile, { force: true }), void checkCloud());
     // Checked with Groq before it is kept.
     const res = await net.fetch(`${process.env.HARK_GROQ_URL || 'https://api.groq.com/openai/v1'}/models`, { headers: { Authorization: `Bearer ${k}` } }).catch(() => null);
     if (!res) throw new Error("Couldn't reach Groq to check the key. Is this Mac online?");
     if (res.status === 401) throw new Error('Groq rejected that key. Copy it again from console.groq.com → API Keys.');
     if (!res.ok) throw new Error(`Groq answered ${res.status}.`);
     fs.writeFileSync(groqFile, JSON.stringify({ key: k }), { mode: 0o600 });
+    void checkCloud();
   },
   groqStatus: async () => ({ hasKey: !!groqKey() }),
   testEmail: async () => {
@@ -1030,9 +1076,10 @@ else {
     makeTray();
     setShortcut(lib.settings().recordShortcut);
     setTimeout(recoverInterrupted, 1500);
+    void checkCloud();
     // Load the speech model right away so the first recording starts instantly; the language model shortly after.
     void warmSpeech();
-    if (!lowMemory) setTimeout(() => void ensureLlm().catch(() => undefined), 2500);
+    if (!lowMemory) setTimeout(() => !useCloud() && void ensureLlm().catch(() => undefined), 4000);
     app.on('activate', () => {
       if (!BrowserWindow.getAllWindows().length) createWindow();
     });

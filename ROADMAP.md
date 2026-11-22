@@ -20,7 +20,7 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
    - [x] Notifications: recording started/stopped, notes ready
    - [x] Menu-bar record control and global shortcut
 2. AI engine
-   - [ ] Mac uses Groq (when a key is set and online) for notes, tutor, revision; local model otherwise; disclosed in Settings
+   - [x] Mac uses Groq (when a key is set and online) for notes, tutor, revision; local model otherwise; disclosed in Settings (src/main/cloud.ts; checked live)
 3. Law intelligence
    - [ ] Law-lecture notes in five styles (concise, detailed, beginner, exam, one page)
    - [ ] Lecturer-emphasis detection (explicit phrases, deterministic) + AI-inferred exam points, both timestamped

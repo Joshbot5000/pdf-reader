@@ -107,6 +107,8 @@ export type Settings = {
   recordShortcut: string;
   /** Show notifications when recording starts, stops and when notes are ready. */
   notify: boolean;
+  /** Where the AI writing happens: Groq when a key is set and the Mac is online ('auto'), or only on this Mac. Transcription is always on this Mac. */
+  aiEngine: 'auto' | 'local';
 };
 
 export type ModelKind = 'asr' | 'llm' | 'support';
@@ -129,6 +131,8 @@ export type EngineStatus = {
   llmError?: string;
   gpu?: string;
   ramGb: number;
+  /** The cloud model in use for writing, when Groq is on. */
+  cloud?: string;
 };
 
 export type SearchHit = { meetingId: string; title: string; date: number; paraId: string; t: number; speaker: string; snippet: string };
@@ -163,6 +167,7 @@ export const DEFAULT_SETTINGS: Settings = {
   micId: '',
   recordShortcut: 'CommandOrControl+Shift+R',
   notify: true,
+  aiEngine: 'auto',
 };
 
 export const LANGUAGES: [string, string][] = [

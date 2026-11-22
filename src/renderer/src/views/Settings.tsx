@@ -84,7 +84,16 @@ export function Settings() {
           {tab === 'models' && (
             <>
               <h3>AI models</h3>
-              <p className="lead">Everything Hark does runs on this computer. Models are downloaded once, then work offline, with no account, no API key and no usage limits.</p>
+              <h5><Sparkles size={13} /> Who writes the notes</h5>
+              <div className="seg engine">
+                <button className={settings.aiEngine === 'auto' ? 'on' : ''} onClick={() => void saveSettings({ aiEngine: 'auto' })}>Groq when online</button>
+                <button className={settings.aiEngine === 'local' ? 'on' : ''} onClick={() => void saveSettings({ aiEngine: 'local' })}>This Mac only</button>
+              </div>
+              <p className="lead">{settings.aiEngine === 'auto'
+                ? `Notes, legal analysis, the tutor and revision questions are written by Groq's large model${status.cloud ? ` (${status.cloud.replace(/^.*\//, '')}, connected)` : ''}, which is far better at law than a model small enough for this Mac. Only the text of a transcript is sent, never the audio, and only when you use these features. Transcription and speaker recognition always stay on this Mac, and when the Mac is offline everything falls back to the model below.`
+                : 'Everything is written by the model on this computer: fully private and offline, but less capable at legal reasoning.'}</p>
+              {settings.aiEngine === 'auto' && <GroqKey />}
+              <p className="lead">The models below run on this computer. They are downloaded once, then work offline, with no account and no usage limits.</p>
               <h5><Mic size={13} /> Speech to text</h5>
               {of('asr').map((m) => <ModelCard key={m.id} m={m} selected={settings.asrModel === m.id} onUse={() => void saveSettings({ asrModel: m.id })} />)}
               <h5><Sparkles size={13} /> Notes, chat and questions</h5>
