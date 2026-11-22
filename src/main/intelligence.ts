@@ -291,6 +291,40 @@ export class Intelligence {
     }
   }
 
+  /** An exam-ready outline and checklist for one topic, built from every lecture that covers it, with citations. */
+  async outline(topic: string, meetingIds: string[], streamId: string): Promise<string> {
+    try {
+      const ready = meetingIds.filter((id) => this.lib.get(id).status === 'ready');
+      for (const id of ready) if (!this.lib.vectors(id).length && this.lib.transcript(id).length) await this.index(id);
+      const words = topic.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3);
+      // A passage counts only if it uses one of the topic's words (by stem) or is very close in meaning: no outline from unrelated material.
+      const stems = words.map((w) => w.slice(0, Math.max(4, w.length - 2)));
+      const hits = (await this.retrieve(topic, ready, 12)).filter((h) => h.score > 0.45 || (h.score > 0.12 && stems.some((st) => h.chunk.text.toLowerCase().includes(st))));
+      const cases: string[] = [], laws: string[] = [];
+      for (const id of ready) {
+        let pack: { legal?: { topics: string[]; cases: { name: string; principle: string; found: boolean; t: number }[]; laws: LawRef[] } } = {};
+        try { pack = JSON.parse(fs.readFileSync(path.join(this.lib.folder(id), 'study.json'), 'utf8')); } catch { continue; }
+        const covers = pack.legal?.topics.some((t) => stems.some((st) => t.toLowerCase().includes(st))) || hits.some((h) => h.meetingId === id);
+        if (!covers || !pack.legal) continue;
+        const title = this.lib.get(id).title;
+        for (const c of pack.legal.cases) if (c.found && c.principle) cases.push(`- ${c.name}: ${c.principle} [${title}, ${fmtTime(Math.max(0, c.t))}]`);
+        for (const l of pack.legal.laws) laws.push(`- ${l.name}${l.section ? ` s ${l.section}` : ''}${l.said ? `: ${l.said}` : ''}${l.check?.status === 'verified' ? ' (verified on legislation.gov.uk)' : ''} [${title}, ${fmtTime(Math.max(0, l.t))}]`);
+      }
+      if (!hits.length && !cases.length) throw new Error(`None of your lectures seem to cover "${topic}" yet.`);
+      const excerpts = hits.map((h) => `[${this.lib.get(h.meetingId).title}, ${fmtTime(h.chunk.s)}] ${h.chunk.text}`).join('\n---\n');
+      const text = await this.llm.generate({
+        streamId, tier: 'strong', temperature: 0.2, maxTokens: 1500,
+        system: 'You are a UK law tutor (England and Wales) writing revision material for an MA Law conversion student, ONLY from their own lecture material below. Never add cases, statutes or rules that are not in the material. Cite sources as [lecture title, m:ss] exactly as given.',
+        prompt: `Topic: ${topic}\n\nExcerpts from the student's lectures:\n${excerpts.slice(0, 9000)}\n\nCases from these lectures:\n${cases.slice(0, 15).join('\n') || '(none)'}\n\nLegislation from these lectures:\n${laws.slice(0, 10).join('\n') || '(none)'}\n\nWrite an exam-ready outline in markdown, with these sections (skip any with nothing to say):\n# ${topic}\n## In one paragraph\n## Rules and tests (with each element)\n## Key authorities (case or statute: the point it stands for)\n## Distinctions and common mistakes\n## Problem-question checklist (numbered steps to work through in an answer)\n## Gaps (anything the lectures leave unclear)\nCite [lecture title, m:ss] after each point. Plain markdown, no tables.`,
+      });
+      this.send({ streamId, done: true });
+      return text.trim().replace(/\\([[\]])/g, '$1');
+    } catch (err) {
+      this.send({ streamId, error: (err as Error).message });
+      throw err;
+    }
+  }
+
   /** Ask a question across every conversation in the library. */
   async ask(question: string, streamId: string): Promise<ChatMsg> {
     const all = this.lib.list().filter((m) => m.status === 'ready');

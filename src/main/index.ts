@@ -270,6 +270,14 @@ const intel = new Intelligence(
 );
 
 const study = new Study(lib, llmApi, (e) => send('stream', e), (id) => stopped.has(id));
+const outlinesFile = path.join(dataDir, 'outlines.json');
+const readOutlines = (): Record<string, { text: string; at: number }> => {
+  try {
+    return JSON.parse(fs.readFileSync(outlinesFile, 'utf8'));
+  } catch {
+    return {};
+  }
+};
 const practiceFile = path.join(dataDir, 'practice.json');
 const readPractice = (): Practice => {
   try {
@@ -903,6 +911,16 @@ const api: Api = {
   chat: (id, question, streamId, mode, passage) => intel.chat(id, question, streamId, mode, passage),
   clearChat: async (id) => lib.update(id, { chat: [] }),
   ask: (question, streamId) => intel.ask(question, streamId),
+  topicOutline: async (topic, folder, streamId) => {
+    stopped.delete(streamId);
+    const ids = lib.list().filter((m) => !folder || m.folder === folder).map((m) => m.id);
+    const text = await intel.outline(topic, ids, streamId);
+    const all = readOutlines();
+    all[`${folder ?? ''}|${topic}`] = { text, at: Date.now() };
+    fs.writeFileSync(outlinesFile, JSON.stringify(all));
+    return all[`${folder ?? ''}|${topic}`];
+  },
+  savedOutline: async (topic, folder) => readOutlines()[`${folder ?? ''}|${topic}`] ?? null,
   clearAsk: async () => lib.saveAskHistory([]),
   catchUp: async (id, streamId) => {
     const l = live.get(id);

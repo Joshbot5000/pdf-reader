@@ -69,6 +69,9 @@ export type Api = {
   practice(key: string, right: boolean, topic: string, lectureId: string): Promise<void>;
   /** The revision dashboard, for every lecture or for one folder (module). */
   revisionOverview(folder?: string): Promise<RevisionOverview>;
+  /** An exam-ready outline of one topic across the lectures (of one folder, if given); kept until rewritten. */
+  topicOutline(topic: string, folder: string | undefined, streamId: string): Promise<{ text: string; at: number }>;
+  savedOutline(topic: string, folder?: string): Promise<{ text: string; at: number } | null>;
   caseBank(): Promise<{ c: CaseRef; meetingId: string; title: string; date: number }[]>;
   exportStudy(id: string, what: 'notes' | 'notes-docx' | 'notes-pdf' | 'anki' | 'all-anki'): Promise<string | null>;
   /** Email one conversation's notes now. */

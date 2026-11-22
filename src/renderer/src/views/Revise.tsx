@@ -1,9 +1,9 @@
 /** Across all lectures: what you know, what you don't, a revision session weakest-first, and the case bank. */
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Download, GraduationCap, Play, Scale, Search, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, Copy, FileText, RotateCw, Sparkles, Download, GraduationCap, Play, Scale, Search, X } from 'lucide-react';
 import { api } from '../api';
-import { go, run, useStore } from '../store';
-import { Spinner, dayLabel } from '../ui/bits';
+import { clearStream, go, run, startStream, toast, useStore } from '../store';
+import { Md, Spinner, dayLabel } from '../ui/bits';
 import { fmtTime } from '../../../shared/text';
 import type { RevisionItem, RevisionOverview } from '../../../shared/api';
 import { REPEATED, type CaseRef, type TopicState } from '../../../shared/law';
@@ -20,10 +20,15 @@ export function ReviseView() {
   const [session, setSession] = useState<RevisionItem[] | null>(null);
   const folders = useStore((s) => s.settings.folders);
   const [folder, setFolder] = useState('');
+  const [outline, setOutline] = useState<string | null>(null);
+  // Pressing Revision in the sidebar again goes back from an outline to the dashboard.
+  const view = useStore((s) => s.view);
+  useEffect(() => setOutline(null), [view]);
   const load = () => void api.revisionOverview(folder || undefined).then(setO);
   useEffect(load, [folder]);
   if (!o) return <div className="center"><Spinner /></div>;
   if (session) return <Session items={session} done={() => (setSession(null), load())} />;
+  if (outline) return <TopicOutline topic={outline} folder={folder || undefined} close={() => setOutline(null)} />;
   return (
     <div className="page revise">
       <header className="page-head">
@@ -34,6 +39,7 @@ export function ReviseView() {
           <button className="btn primary" disabled={!o.session.length} onClick={() => setSession(o.session)}><Play size={15} /> {o.session.length ? `Revise now (${o.session.length})` : 'Nothing due'}</button>
         </div>
       </header>
+      <OutlineAny open={setOutline} />
       {!o.totals.items ? (
         <section className="empty"><GraduationCap size={30} /><h3>Nothing to revise yet</h3><p>Open a lecture, go to <b>Study → Revise</b>, and create flashcards or questions. Your results here show what you know and what needs work, and each session picks your weakest material first.</p></section>
       ) : (
@@ -43,6 +49,7 @@ export function ReviseView() {
             {o.topics.map((t) => (
               <div key={t.topic} className={`topic ${STATE[t.state][1]}`}>
                 <b>{t.topic}</b>
+                <button className="btn ghost small topic-outline" title="Exam-ready outline from all your lectures" onClick={() => setOutline(t.topic)}><FileText size={12} /> Outline</button>
                 <span className="chip">{STATE[t.state][0]}</span>
                 <p className="dim small">{t.tested ? `${Math.round(t.accuracy * 100)}% right · ` : ''}{t.tested}/{t.items} tried · practised {ago(t.lastPractised)}{t.due ? ` · ${t.due} due` : ''}{t.confusing ? ` · ${t.confusing} marked confusing` : ''}{t.asked >= REPEATED ? ` · asked the tutor ${t.asked} times` : ''}</p>
               </div>
@@ -153,5 +160,61 @@ function FolderPick({ folders, value, set }: { folders: string[]; value: string;
       <option value="">All modules</option>
       {folders.map((f) => <option key={f} value={f}>{f}</option>)}
     </select>
+  );
+}
+
+/** Outline any topic by name, e.g. one you have no questions on yet. */
+function OutlineAny({ open }: { open: (t: string) => void }) {
+  const [q, setQ] = useState('');
+  return (
+    <form className="outline-any" onSubmit={(e) => (e.preventDefault(), q.trim() && open(q.trim()))}>
+      <FileText size={14} className="dim" />
+      <input value={q} placeholder="Outline any topic across your lectures, e.g. Consideration" onChange={(e) => setQ(e.target.value)} />
+      <button className="btn small" disabled={!q.trim()}>Outline</button>
+    </form>
+  );
+}
+
+/** An exam-ready outline and problem-question checklist for one topic, from every lecture that covers it. */
+function TopicOutline({ topic, folder, close }: { topic: string; folder?: string; close: () => void }) {
+  const [saved, setSaved] = useState<{ text: string; at: number } | null | undefined>(undefined);
+  const [job, setJob] = useState('');
+  const stream = useStore((s) => (job ? s.streams[job] : undefined));
+  const write = async () => {
+    const id = `outline:${Date.now()}`;
+    startStream(id);
+    setJob(id);
+    try {
+      setSaved(await api.topicOutline(topic, folder, id));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e);
+      if (!/Stopped/.test(msg)) toast(msg, 'error');
+    } finally {
+      setJob('');
+      clearStream(id);
+    }
+  };
+  useEffect(() => {
+    void api.savedOutline(topic, folder).then((o) => (setSaved(o), !o && void write()));
+  }, [topic, folder]);
+  const text = job ? stream?.text : saved?.text;
+  return (
+    <div className="page outline-page">
+      <header className="page-head">
+        <div>
+          <button className="btn ghost small" onClick={close}><ArrowLeft size={14} /> Revision</button>
+          <p className="eyebrow">Outline{folder ? ` · ${folder}` : ''} · from your lectures only</p>
+          <h1>{topic}</h1>
+        </div>
+        <div className="row">
+          {text && !job && <button className="btn ghost" onClick={() => void navigator.clipboard.writeText(text).then(() => toast('Outline copied.', 'ok'))}><Copy size={15} /> Copy</button>}
+          {!job && saved && <button className="btn ghost" onClick={() => void write()}><RotateCw size={15} /> Rewrite</button>}
+          {job && <button className="btn ghost" onClick={() => void api.abort(job)}>Stop</button>}
+        </div>
+      </header>
+      {job && <p className="study-progress"><span className="sheen"><Sparkles size={14} /> {stream?.stage ?? 'Gathering what your lectures said'}…</span></p>}
+      {text ? <div className="study-notes outline"><Md text={text} /></div> : !job && saved === null && <p className="dim">No outline yet.</p>}
+      {saved && !job && <p className="dim small">Written {dayLabel(saved.at)}. Citations show [lecture, time]; open the lecture to hear that moment.</p>}
+    </div>
   );
 }
