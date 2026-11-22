@@ -5,7 +5,7 @@ import { api } from '../api';
 import { clearStream, run, startStream, toast, useStore } from '../store';
 import { Md, Spinner } from '../ui/bits';
 import { fmtTime } from '../../../shared/text';
-import { NOTE_STYLES, type Card, type Difficulty, type NoteStyle, type Sbaq, type StudyPack } from '../../../shared/law';
+import { NOTE_STYLES, type LawRef, type Card, type Difficulty, type NoteStyle, type Sbaq, type StudyPack } from '../../../shared/law';
 import type { Meeting } from '../../../shared/types';
 import type { MaterialInfo } from '../../../shared/api';
 import { uid } from '../../../shared/types';
@@ -55,7 +55,7 @@ export function StudyTab({ m, seek }: { m: Meeting; seek: Seek }) {
       {auto && <p className="study-auto"><Spinner size={12} /> Analysing this lecture…</p>}
       {pane === 'notes' && <NotesPane m={m} pack={pack} setPack={setPack} seek={seek} />}
       {pane === 'exam' && <LegalGate m={m} pack={pack} setPack={setPack}>{(legal) => <ExamPane m={m} legal={legal} seek={seek} />}</LegalGate>}
-      {pane === 'cases' && <LegalGate m={m} pack={pack} setPack={setPack}>{(legal) => <CasesPane legal={legal} seek={seek} />}</LegalGate>}
+      {pane === 'cases' && <LegalGate m={m} pack={pack} setPack={setPack}>{(legal) => <CasesPane m={m} legal={legal} seek={seek} setPack={setPack} />}</LegalGate>}
       {pane === 'revise' && <RevisePane m={m} pack={pack} setPack={setPack} seek={seek} />}
     </div>
   );
@@ -185,7 +185,10 @@ function ExamPane({ m, legal, seek }: { m: Meeting; legal: NonNullable<StudyPack
   );
 }
 
-function CasesPane({ legal, seek }: { legal: NonNullable<StudyPack['legal']>; seek: Seek }) {
+function CasesPane({ m, legal, seek, setPack }: { m: Meeting; legal: NonNullable<StudyPack['legal']>; seek: Seek; setPack: (p: StudyPack) => void }) {
+  const [checking, setChecking] = useState(false);
+  const unchecked = legal.laws.some((l) => !l.check || l.check.status === 'offline');
+  const recheck = () => (setChecking(true), void run(api.checkLaws(m.id)).then((p) => p && setPack(p)).finally(() => setChecking(false)));
   return (
     <div className="study-list">
       <h4>Cases <span className="dim">{legal.cases.length}</span></h4>
@@ -203,16 +206,16 @@ function CasesPane({ legal, seek }: { legal: NonNullable<StudyPack['legal']>; se
           </dl>
         </article>
       ))}
-      <h4>Legislation <span className="dim">{legal.laws.length}</span></h4>
+      <h4>Legislation <span className="dim">{legal.laws.length}</span>{legal.laws.length > 0 && unchecked && <button className="btn ghost small" disabled={checking} onClick={recheck}>{checking ? <Spinner size={12} /> : <RotateCw size={12} />} Check on legislation.gov.uk</button>}</h4>
       {!legal.laws.length && <p className="dim small">No statutes or sections were mentioned.</p>}
       {legal.laws.map((l, i) => (
         <article key={i} className="case">
           <header><b>{l.name}{l.section ? `, s ${l.section}` : ''}</b><At t={l.t} seek={seek} /></header>
-          {l.said && <p className="small">{l.said}</p>}
-          <p className="small"><span className="chip">Not verified</span> <a href={l.link} target="_blank" rel="noreferrer">Check it on legislation.gov.uk <ExternalLink size={11} /></a></p>
+          {l.said && <p className="small"><span className="src-label">Lecturer said</span> {l.said}</p>}
+          <LawStatus l={l} />
         </article>
       ))}
-      <p className="dim small">Everything above comes from the lecture. Case details are as the lecturer gave them; check citations and holdings against a law report before relying on them.</p>
+      <p className="dim small">Everything above comes from the lecture, except statute wording marked “Official text”, which comes from legislation.gov.uk. Case details are as the lecturer gave them; check citations and holdings against a law report before relying on them.</p>
     </div>
   );
 }
@@ -332,5 +335,26 @@ function Reveal({ n, q, a, big, onMark, remove }: { n: number; q: string; a: str
       {show ? <div className="explain"><Md text={a} />{onMark && !marked && <div className="row"><span className="small dim">How did you do?</span><button className="btn small" onClick={() => (onMark(false), setMarked(true))}>Missed it</button><button className="btn small primary" onClick={() => (onMark(true), setMarked(true))}>Got it</button></div>}</div>
         : <button className="btn small" onClick={() => setShow(true)}><ListChecks size={13} /> {big ? 'Show the issues and model answer' : 'Show the answer'}</button>}
     </article>
+  );
+}
+
+/** What legislation.gov.uk says about a statute reference, kept apart from what the lecturer said. */
+function LawStatus({ l }: { l: LawRef }) {
+  const [open, setOpen] = useState(false);
+  const c = l.check;
+  if (!c || c.status === 'offline')
+    return <p className="small"><span className="chip">Not checked yet</span> <a href={l.link} target="_blank" rel="noreferrer">Search legislation.gov.uk <ExternalLink size={11} /></a>{c?.note && <span className="dim"> · {c.note}</span>}</p>;
+  if (c.status !== 'verified')
+    return <p className="warn-line"><AlertTriangle size={12} /> {c.note} {c.url && <a href={c.url} target="_blank" rel="noreferrer">Open the Act <ExternalLink size={11} /></a>}</p>;
+  return (
+    <div className="law-check">
+      <p className="small"><span className="chip ok"><Check size={11} /> Verified on legislation.gov.uk</span> <a href={c.url} target="_blank" rel="noreferrer">{c.title}{c.heading ? `: ${c.heading}` : ''} <ExternalLink size={11} /></a></p>
+      {c.text && (
+        <>
+          <button className="link small" onClick={() => setOpen((o) => !o)}>{open ? 'Hide' : 'Show'} the official text</button>
+          {open && <blockquote className="official"><span className="src-label">Official text (current version)</span>{c.text}</blockquote>}
+        </>
+      )}
+    </div>
   );
 }

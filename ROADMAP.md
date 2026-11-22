@@ -25,7 +25,11 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
    - [x] Law-lecture notes in five styles (concise, detailed, beginner, exam, one page)
    - [x] Lecturer-emphasis detection (explicit phrases, deterministic) + AI-inferred exam points, both timestamped
    - [x] Case extraction (name, facts, issue, judgment, principle, why mentioned, timestamp), flagged as unverified
-   - [x] Legislation extraction with legislation.gov.uk links
+   - [x] Legislation extraction, checked against legislation.gov.uk's open data: the Act or regulations are found by title,
+         the section (or subsection) is fetched, and its official current wording is shown under "Official text", kept
+         apart from "Lecturer said". Not found / wrong section numbers are flagged; offline gives "Not checked yet" with
+         a re-check button (src/main/legislation.ts, tests/legislation.test.ts with real fixtures; live run verified s 2)
+   - [x] Research tutor mode quotes official statute text from legislation.gov.uk with its link (live run, s 2(2))
    - [x] Case bank across lectures
 4. Revision pack
    - [x] Flashcards: generate, edit, delete, add, export to Anki
@@ -62,9 +66,11 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 - tests/recover.mjs (crash recovery), tests/email.mjs, tests/groq.mjs, tests/phone.mjs still pass.
 
 ## Known limits / next tasks
-- Exact next task: check legislation against legislation.gov.uk's own data (Act found, section exists, section text
-  shown) instead of only a search link.
+- Exact next task: revision outlines: for any topic on the Revision page, an exam-ready outline and checklist built
+  from every lecture on that topic (with lecture/timestamp citations).
+- Then: Ask Hark answers questions about revision progress ("which topics have I not revised recently?").
 - Scanned PDFs (images only) are refused with a clear message: there is no OCR.
 - Groq free plan is ~8,000 tokens/minute per model: long lectures are analysed in parts with waits (minutes, not seconds).
-- "Research" tutor mode has no web search; it uses general knowledge, clearly labelled, and points to where to verify.
-- Legislation links go to a legislation.gov.uk search for the Act; the section text itself is not fetched or verified.
+- "Research" tutor mode fetches statute text but has no general web search; other outside material is labelled "check this".
+- Case law cannot be verified automatically (no free official case-law API); cases stay marked for checking.
+- Official statute text is the current version; it may differ from the version in force at the time of a case.

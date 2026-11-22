@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:leg="http://www.legislation.gov.uk/namespaces/legislation" xmlns:ukm="http://www.legislation.gov.uk/namespaces/metadata" xmlns:theme="http://www.legislation.gov.uk/namespaces/theme" xmlns:openSearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:parameters="http://a9.com/-/spec/opensearch/extensions/parameters/1.0/">
+			<id>http://www.legislation.gov.uk/title/misrepresentation%20act/data.feed</id>
+			<link rel="self" type="application/atom+xml" href="http://www.legislation.gov.uk/title/misrepresentation%20act/data.feed"/>
+			
+			<link rel="alternate" type="text/csv" href="http://www.legislation.gov.uk/title/misrepresentation%20act/data.csv"/>
+			<updated>2025-03-20T23:59:59Z</updated>
+			<title>Search Results</title>
+			<openSearch:Query role="request" leg:type="all" leg:title="Misrepresentation Act"> </openSearch:Query>
+			<openSearch:itemsPerPage>20</openSearch:itemsPerPage>
+			<openSearch:startIndex>1</openSearch:startIndex>
+			<leg:page>1</leg:page>
+			<leg:morePages>1</leg:morePages>
+			<leg:facets>
+								
+								<leg:facetTypes><leg:facetType type="NorthernIrelandParliamentAct" href="http://www.legislation.gov.uk/search/data.feed?type=apni&amp;title=Misrepresentation%20Act" value="1"/><leg:facetType type="UnitedKingdomPublicGeneralAct" href="http://www.legislation.gov.uk/search/data.feed?type=ukpga&amp;title=Misrepresentation%20Act" value="1"/></leg:facetTypes>
+								<leg:facetYears><leg:facetYear year="1967" href="http://www.legislation.gov.uk/search/data.feed?year=1967&amp;title=Misrepresentation%20Act" total="2"/></leg:facetYears>
+								<leg:facetHundreds/>
+								
+							</leg:facets>
+			<leg:title><leg:and><leg:term>Misrepresentation</leg:term><leg:term>Act</leg:term></leg:and></leg:title>
+			<openSearch:totalResults>2</openSearch:totalResults>
+			<link rel="first" type="application/atom+xml" href="http://www.legislation.gov.uk/title/misrepresentation%20act/data.feed"/><entry>
+			<id>http://www.legislation.gov.uk/id/apni/1967/14</id>
+			<title>Misrepresentation Act (Northern Ireland) 1967</title>
+			<link rel="self" href="http://www.legislation.gov.uk/id/apni/1967/14"/>
+			<link href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01"/>
+			<link rel="alternate" type="application/xml" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.xml" title="XML"/><link rel="alternate" type="application/rdf+xml" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.rdf" title="RDF/XML"/><link rel="alternate" type="application/akn+xml" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.akn" title="AKN"/><link rel="alternate" type="application/xhtml+xml" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.xht" title="HTML snippet"/><link rel="alternate" type="application/akn+xhtml" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.html" title="HTML5"/><link rel="alternate" type="text/html" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.htm" title="Website (XHTML) Default View"/><link rel="alternate" type="text/csv" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.csv" title="CSV"/><link rel="alternate" type="application/pdf" href="http://www.legislation.gov.uk/apni/1967/14/2014-10-01/data.pdf" title="PDF"/>
+			<link rel="http://purl.org/dc/terms/tableOfContents" type="application/xml" href="http://www.legislation.gov.uk/apni/1967/14/contents" title="Table of Contents"/>
+			<author><name/></author>
+			<updated>2024-05-04T17:59:18Z</updated>
+			<published>1967-06-27T00:00:00Z</published>
+			<ukm:DocumentMainType Value="NorthernIrelandParliamentAct"/><ukm:Year Value="1967"/><ukm:Number Value="14"/><ukm:CreationDate Date="1967-06-27"/>
+			
+			
+			
+			<summary>An Act to amend the law relating to innocent misrepresentations and to amend sections 11 and 35 of the Sale of Goods Act 1893.</summary>
+		</entry><entry>
+			<id>http://www.legislation.gov.uk/id/ukpga/1967/7</id>
+			<title>Misrepresentation Act 1967</title>
+			<link rel="self" href="http://www.legislation.gov.uk/id/ukpga/1967/7"/>
+			<link href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01"/>
+			<link rel="alternate" type="application/xml" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.xml" title="XML"/><link rel="alternate" type="application/rdf+xml" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.rdf" title="RDF/XML"/><link rel="alternate" type="application/akn+xml" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.akn" title="AKN"/><link rel="alternate" type="application/xhtml+xml" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.xht" title="HTML snippet"/><link rel="alternate" type="application/akn+xhtml" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.html" title="HTML5"/><link rel="alternate" type="text/html" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.htm" title="Website (XHTML) Default View"/><link rel="alternate" type="text/csv" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.csv" title="CSV"/><link rel="alternate" type="application/pdf" href="http://www.legislation.gov.uk/ukpga/1967/7/2015-10-01/data.pdf" title="PDF"/>
+			<link rel="http://purl.org/dc/terms/tableOfContents" type="application/xml" href="http://www.legislation.gov.uk/ukpga/1967/7/contents" title="Table of Contents"/>
+			<author><name/></author>
+			<updated>2025-03-20T19:32:30Z</updated>
+			<published>1967-03-22T00:00:00Z</published>
+			<ukm:DocumentMainType Value="UnitedKingdomPublicGeneralAct"/><ukm:Year Value="1967"/><ukm:Number Value="7"/><ukm:ISBN Value="9780108503634"/><ukm:CreationDate Date="1967-03-22"/>
+			
+			
+			<category term="Faulty goods"/>
+			<summary>An Act to amend the law relating to innocent misrepresentations and to amend sections 11 and 35 of the Sale of Goods Act 1893.</summary>
+		</entry>
+		</feed>

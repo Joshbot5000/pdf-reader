@@ -6,6 +6,8 @@ import { uid } from '../shared/types';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadMaterials, relevantPages } from './materials';
+import { checkLaw } from './legislation';
+import { findLegislation, type LawRef } from '../shared/law';
 import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId, TutorMode } from '../shared/types';
 
 const MODE_RULES: Record<TutorMode, string> = {
@@ -16,7 +18,7 @@ const MODE_RULES: Record<TutorMode, string> = {
   case: 'Explain cases through their facts, the legal issue, the decision and the principle (ratio), and why the case matters for this topic.',
   compare: 'Compare the concepts, cases or tests side by side: what they share, how they differ, and when each applies. Use short parallel bullet points.',
   lecture: 'Answer ONLY from the lecture material below. If the answer is not there, say exactly: "Your lectures don\'t cover that." Do not add outside knowledge.',
-  research: 'You may go beyond the lecture using your general knowledge of English law. Clearly separate "From your lecture:" and "Beyond the lecture (check this):". Never invent case names, citations or section numbers: if unsure, say so and suggest where to check (legislation.gov.uk for statutes, BAILII or a law report for cases).',
+  research: 'You may go beyond the lecture using your general knowledge of English law. Clearly separate "From your lecture:" and "Beyond the lecture (check this):". Never invent case names, citations or section numbers: if unsure, say so and suggest where to check (legislation.gov.uk for statutes, BAILII or a law report for cases). When official statute text from legislation.gov.uk is provided, quote it accurately and give its link.',
 };
 
 export type LlmApi = {
@@ -229,7 +231,7 @@ export class Intelligence {
     const history = m.chat.slice(-6).map((c) => ({ role: c.role, text: c.text }));
     const ctx = await this.llm.contextSize();
     const mats = loadMaterials(this.lib.folder(meetingId));
-    const budget = ctx - 900 - roughTokens(history.map((h) => h.text).join(' ')) - 300 - (mats.length ? 750 : 0);
+    const budget = ctx - 900 - roughTokens(history.map((h) => h.text).join(' ')) - 300 - (mats.length ? 750 : 0) - (mode === 'research' ? 1100 : /\b(Act|Regulations?)\b/.test(question) ? 450 : 0);
     const full = transcriptForLLM(paras, m.speakers);
     let material: string;
     if ((await this.llm.tokens(full)) <= budget) material = `Transcript:\n${full}`;
@@ -261,9 +263,22 @@ export class Intelligence {
     // Slides and handouts: the pages that best match the question.
     const pages = mats.length ? relevantPages(mats, `${question} ${passage?.text ?? ''}`, 2500) : '';
     const slides = pages ? `\n\nFrom the course materials for this lecture (cite as [file, slide or page]; these count as lecture material):\n${pages}` : '';
+    // Statutes: the official wording from legislation.gov.uk, for statutes named in the question or passage and, in research mode, those the lecture relied on.
+    let official = '';
+    try {
+      const asked = findLegislation([{ id: 'q', sp: '', s: 0, e: 0, text: `${question} ${passage?.text ?? ''}`, words: [] }]);
+      let lectureLaws: LawRef[] = [];
+      if (mode === 'research') try { lectureLaws = JSON.parse(fs.readFileSync(path.join(this.lib.folder(meetingId), 'study.json'), 'utf8')).legal?.laws ?? []; } catch { /* none */ }
+      const refs = [...asked.map((a) => ({ name: a.name, section: a.section })), ...lectureLaws.map((l) => ({ name: l.name, section: l.section }))].filter((r, i, all) => all.findIndex((x) => x.name === r.name && x.section === r.section) === i).slice(0, 3);
+      const checks = await Promise.all(refs.map((r) => checkLaw(r.name, r.section)));
+      const lines = checks.flatMap((c, i) => (c.status === 'verified' && c.text ? [`${c.title}${refs[i].section ? `, s ${refs[i].section}` : ''} (${c.url}):\n${c.text.slice(0, 1400)}`] : []));
+      if (lines.length) official = `\n\nOfficial statute text from legislation.gov.uk (current version; label it as legislation.gov.uk and give the link if you use it):\n${lines.join('\n---\n')}`;
+    } catch {
+      /* offline: answer without it */
+    }
     const focus = passage ? `\n\nThe student is asking about this passage, said at [${fmtTime(passage.t)}]:\n"${passage.text.slice(0, 1500)}"` : '';
     const lecture = m.template === 'lecture';
-    const system = `${lecture ? `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}` : `You are Hark, an assistant answering questions about the recorded conversation "${m.title}".${mode === 'lecture' ? ' Answer only from the material below.' : ''}`}\nGround your answer in the material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${slides}${others}${focus}`;
+    const system = `${lecture ? `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}` : `You are Hark, an assistant answering questions about the recorded conversation "${m.title}".${mode === 'lecture' ? ' Answer only from the material below.' : ''}`}\nGround your answer in the material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${slides}${official}${others}${focus}`;
     try {
       const text = await this.llm.generate({ streamId, system, history, prompt: question, maxTokens: mode === 'exam' || mode === 'compare' ? 1000 : 750, temperature: mode === 'socratic' || mode === 'explain' ? 0.5 : 0.3, tier: 'strong' });
       const reply: ChatMsg = { id: uid(), role: 'assistant', text, at: Date.now() };

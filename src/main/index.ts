@@ -1008,6 +1008,7 @@ const api: Api = {
   studyLegal: (id, streamId) => (stopped.delete(streamId), study.legal(id, streamId)),
   studyRevision: (id, kind, opts, streamId) => (stopped.delete(streamId), study.revision(id, kind, opts, streamId)),
   studySave: async (id, patch) => study.save(id, patch),
+  checkLaws: (id) => study.checkLaws(id),
   materials: async (id) => loadMaterials(lib.folder(id)).map(info),
   addMaterials: async (id, paths) => {
     if (!paths?.length) {

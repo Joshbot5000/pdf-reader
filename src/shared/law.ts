@@ -25,7 +25,9 @@ export type CaseRef = {
   found: boolean;
   uncertain?: string;
 };
-export type LawRef = { name: string; section?: string; said: string; t: number; found: boolean; link: string };
+/** The result of looking a statute up on legislation.gov.uk. */
+export type LawCheck = { status: 'verified' | 'not-found' | 'section-missing' | 'offline'; at: number; title?: string; url?: string; heading?: string; text?: string; note?: string };
+export type LawRef = { name: string; section?: string; said: string; t: number; found: boolean; link: string; check?: LawCheck };
 export type Emphasis = { text: string; t: number; kind: 'explicit' | 'inferred'; cue?: string };
 
 export type Card = { id: string; front: string; back: string; kind: string; topic: string; t?: number };

@@ -12,7 +12,7 @@
     "build": "electron-vite build && vite build -c vite.phone.config.ts",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run tests/unit.test.ts tests/materials.test.ts",
+    "test": "vitest run tests/unit.test.ts tests/materials.test.ts tests/legislation.test.ts",
     "test:e2e": "npm run build && node tests/tour.mjs scratch/shots",
     "dist": "npm run build && electron-builder",
     "test:phone": "npm run build && node tests/phone.mjs scratch/phone-shots",

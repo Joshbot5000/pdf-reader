@@ -12,6 +12,7 @@ import type { LlmApi } from './intelligence';
 import { fmtTime, parseTime, roughTokens, transcriptForLLM } from '../shared/text';
 import { NOTE_STYLES, explicitEmphasis, findCaseNames, findLegislation, legislationLink, locate, locateName, norm, parseJson, type CaseRef, type Card, type Difficulty, type Emphasis, type LawRef, type NoteStyle, type Problem, type Sbaq, type ShortQ, type StudyPack } from '../shared/law';
 import { uid } from '../shared/types';
+import { checkLaw } from './legislation';
 import { loadMaterials, materialCases, materialsOutline } from './materials';
 import type { StreamEvent } from '../shared/types';
 
@@ -225,6 +226,8 @@ export class Study {
       const emphasis: Emphasis[] = [...explicitEmphasis(paras)];
       for (const e of found.exam_points!) if (e.point) emphasis.push({ text: String(e.point), t: time(e.time), kind: 'inferred' });
       const topics = [...new Set(found.topics!.map((t) => String(t).trim()).filter(Boolean))].slice(0, 8);
+      this.stage(streamId, 'Checking statutes on legislation.gov.uk');
+      await this.verifyLaws(laws);
       const pack = this.save(id, { legal: { cases: cases.sort((a, b) => (a.t < 0 ? 1e9 : a.t) - (b.t < 0 ? 1e9 : b.t)), laws: laws.sort((a, b) => a.t - b.t), emphasis, topics, at: Date.now(), model: this.llm.modelName() } });
       this.send({ streamId, done: true });
       return pack;
@@ -232,6 +235,19 @@ export class Study {
       this.send({ streamId, error: (err as Error).message });
       throw err;
     }
+  }
+
+  /** Look each statute up on legislation.gov.uk (a few at a time). Failures are recorded on the reference, never thrown. */
+  private async verifyLaws(laws: LawRef[]): Promise<void> {
+    for (let i = 0; i < laws.length; i += 4) await Promise.all(laws.slice(i, i + 4).map(async (l) => (l.check = await checkLaw(l.name, l.section))));
+  }
+
+  /** Check (again) the statutes already found in a lecture, e.g. after being offline. */
+  async checkLaws(id: string): Promise<StudyPack> {
+    const pack = this.get(id);
+    if (!pack.legal) return pack;
+    await this.verifyLaws(pack.legal.laws);
+    return this.save(id, { legal: pack.legal });
   }
 
   /** What revision questions are written from: the notes and case analysis if they exist (shorter and already checked), else the transcript. */

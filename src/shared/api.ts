@@ -58,6 +58,8 @@ export type Api = {
   studyRevision(id: string, kind: 'cards' | 'sbaqs' | 'shortQs' | 'problems', opts: { count: number; difficulty: Difficulty }, streamId: string): Promise<StudyPack>;
   /** Edit what was generated (flashcards and questions can be changed, added or deleted). */
   studySave(id: string, patch: Partial<StudyPack>): Promise<StudyPack>;
+  /** Check a lecture's statutes against legislation.gov.uk. */
+  checkLaws(id: string): Promise<StudyPack>;
   /** Slides and handouts attached to a lecture. */
   materials(id: string): Promise<MaterialInfo[]>;
   /** Attach files (a file dialog opens when no paths are given). Files that could not be read are reported in errors. */
