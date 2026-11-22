@@ -130,10 +130,16 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
         setFind((f) => f ?? '');
       } else if (e.key === 'Escape' && find !== null) setFind(null);
       else if (typing) return;
+      else if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.veil, .menu, .popover, .sel-pop')) go({ name: 'home' });
       else if (e.key === ' ' && audio.current) {
         e.preventDefault();
         if (audio.current.paused) void audio.current.play();
         else audio.current.pause();
+      } else if ((e.key === '[' || e.key === ']') && audio.current) {
+        const rates = [0.75, 1, 1.25, 1.5, 1.75, 2];
+        const r = rates[Math.max(0, Math.min(rates.length - 1, rates.indexOf(audio.current.playbackRate) + (e.key === ']' ? 1 : -1)))] ?? 1;
+        audio.current.playbackRate = r;
+        setRate(r);
       } else if (e.key === 'ArrowLeft' && audio.current) audio.current.currentTime -= 5;
       else if (e.key === 'ArrowRight' && audio.current) audio.current.currentTime += 5;
     };
@@ -157,7 +163,7 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
   const exportAs = (f: 'md' | 'txt' | 'srt' | 'pdf' | 'docx' | 'audio') => void run(api.exportMeeting(id, f)).then((p) => p && toast('Saved', 'ok'));
   const copy = (text: string, what: string) => void api.copyText(text).then(() => toast(`${what} copied`, 'ok'));
   const nextRate = () => {
-    const r = [1, 1.25, 1.5, 2, 0.75][([1, 1.25, 1.5, 2, 0.75].indexOf(rate) + 1) % 5];
+    const r = [1, 1.25, 1.5, 1.75, 2, 0.75][([1, 1.25, 1.5, 1.75, 2, 0.75].indexOf(rate) + 1) % 6];
     setRate(r);
     if (audio.current) audio.current.playbackRate = r;
   };

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Archive, ArchiveRestore, ArrowUp, FileAudio, GraduationCap, Mic, MessagesSquare, NotebookPen, Play, Sparkles, Star, Trash2, Upload, Users } from 'lucide-react';
 import { api } from '../api';
 import { go, run, set, useStore } from '../store';
@@ -35,6 +35,23 @@ export function Home() {
   const tag = view.name === 'home' ? view.tag : undefined;
   const archived = view.name === 'home' ? !!view.archived : false;
   const shown = useMemo(() => meetings.filter((m) => !!m.archived === archived && (!folder || m.folder === folder) && (!starred || m.starred) && (!tag || m.tags?.includes(tag))), [meetings, folder, starred, tag, archived]);
+  // J/K move through the list, Enter opens.
+  const [sel, setSel] = useState(-1);
+  useEffect(() => setSel(-1), [folder, starred, tag, archived]);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable || e.metaKey || e.ctrlKey || e.altKey || document.querySelector('.veil')) return;
+      const k = e.key.toLowerCase();
+      if (k === 'j' || e.key === 'ArrowDown' || k === 'k' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSel((i) => Math.max(0, Math.min(shown.length - 1, i + (k === 'j' || e.key === 'ArrowDown' ? 1 : -1))));
+      } else if (e.key === 'Enter' && sel >= 0 && shown[sel]) go(shown[sel].status === 'recording' ? { name: 'record' } : { name: 'meeting', id: shown[sel].id });
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [shown, sel]);
+  useEffect(() => void (sel >= 0 && document.querySelector('.card.sel')?.scrollIntoView({ block: 'nearest' })), [sel]);
   const groups = useMemo(() => {
     const g: [string, Meeting[]][] = [];
     for (const m of shown) {
@@ -122,7 +139,7 @@ export function Home() {
         groups.map(([label, list]) => (
           <section key={label} className="group">
             <h4>{label}</h4>
-            <div className="cards">{list.map((m) => <Card key={m.id} m={m} />)}</div>
+            <div className="cards">{list.map((m) => <Card key={m.id} m={m} active={sel >= 0 && shown[sel]?.id === m.id} />)}</div>
           </section>
         ))
       )}
@@ -130,12 +147,12 @@ export function Home() {
   );
 }
 
-function Card({ m }: { m: Meeting }) {
+function Card({ m, active }: { m: Meeting; active?: boolean }) {
   const progress = useStore((s) => s.progress[m.id]);
   const busy = m.status === 'processing' || m.status === 'recording';
   const open = m.summary?.actions.filter((a) => !a.done).length ?? 0;
   return (
-    <article className={`card ${busy ? 'busy' : ''} ${m.status === 'error' ? 'err' : ''}`} onClick={() => go(m.status === 'recording' ? { name: 'record' } : { name: 'meeting', id: m.id })}>
+    <article className={`card ${busy ? 'busy' : ''} ${m.status === 'error' ? 'err' : ''} ${active ? 'sel' : ''}`} onClick={() => go(m.status === 'recording' ? { name: 'record' } : { name: 'meeting', id: m.id })}>
       <div className="card-main">
         <div className="card-top">
           <h3>{m.title}</h3>

@@ -44,6 +44,7 @@ export function App() {
   const view = useStore((s) => s.view);
   const platform = useStore((s) => s.platform);
   const palette = useStore((s) => s.palette);
+  const [keys, setKeys] = useState(false);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const [dragging, setDragging] = useState(false);
   useTheme();
@@ -61,10 +62,14 @@ export function App() {
       if (c === 'settings') set({ settingsOpen: 'general' });
     });
     const key = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      const typing = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
       if (e.key === 'Escape') {
-        if (get().palette) set({ palette: false });
-        else if (get().settingsOpen) set({ settingsOpen: false });
-      }
+        // Marked as handled so views do not also treat this Escape as "go back".
+        if (get().palette) (set({ palette: false }), e.preventDefault());
+        else if (get().settingsOpen) (set({ settingsOpen: false }), e.preventDefault());
+        else if (document.querySelector('.shortcuts')) (setKeys(false), e.preventDefault());
+      } else if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey && e.key === '?') setKeys((k) => !k);
     };
     let depth = 0;
     const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
@@ -127,6 +132,7 @@ export function App() {
             {view.name === 'cases' && <CasesView />}
           </main>
           {palette && <Palette />}
+          {keys && <Shortcuts close={() => setKeys(false)} />}
           {settingsOpen && <Settings />}
         </>
       )}
@@ -348,4 +354,34 @@ export function highlight(text: string, q: string): React.ReactNode {
   const terms = q.trim().split(/\s+/).filter((t) => t.length > 1).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   if (!terms.length) return text;
   return text.split(new RegExp(`(${terms.join('|')})`, 'ig')).map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : p));
+}
+
+const SHORTCUTS: [string, string][] = [
+  ['⌘N', 'Start a recording'],
+  ['⌘⇧R', 'Start or stop recording from any app'],
+  ['⌘K', 'Search everything'],
+  ['⌘J', 'Ask Hark'],
+  ['⌘O', 'Import audio or video'],
+  ['⌘,', 'Settings'],
+  ['J / K', 'Next / previous conversation in the list'],
+  ['Enter', 'Open the selected conversation'],
+  ['Space', 'Play or pause the recording'],
+  ['← / →', 'Back or forward 5 seconds'],
+  ['[ / ]', 'Slower / faster playback'],
+  ['B', 'Bookmark this moment (while recording)'],
+  ['⌘F', 'Find in the transcript'],
+  ['Esc', 'Close or go back'],
+  ['?', 'Show this list'],
+];
+
+function Shortcuts({ close }: { close: () => void }) {
+  return (
+    <div className="veil" onMouseDown={close}>
+      <div className="shortcuts" onMouseDown={(e) => e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
+        <h3>Keyboard shortcuts</h3>
+        <dl>{SHORTCUTS.map(([k, what]) => <div key={k}><dt><kbd>{k}</kbd></dt><dd>{what}</dd></div>)}</dl>
+        <p className="dim small">On Windows, use Ctrl for ⌘.</p>
+      </div>
+    </div>
+  );
 }

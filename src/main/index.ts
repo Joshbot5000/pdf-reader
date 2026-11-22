@@ -1052,6 +1052,7 @@ const api: Api = {
     const items: RevisionItem[] = [];
     const confusing: { meetingId: string; title: string; paraId: string; t: number; text: string }[] = [];
     const confusedTopics: Record<string, number> = {};
+    const askedTopics: Record<string, number> = {};
     const untested: { id: string; title: string }[] = [];
     let lectures = 0;
     for (const m of lib.list().filter((x) => !folder || x.folder === folder)) {
@@ -1070,6 +1071,17 @@ const api: Api = {
         }
         return lectureTopics.includes(t) ? t : best || fallback;
       };
+      // The lecture topic a question or passage is about, or '' when it matches none.
+      const about = (text: string): string => {
+        const words = new Set(text.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3).map((w) => w.replace(/s$/, '')));
+        let best = '', score = 0;
+        for (const lt of lectureTopics) {
+          const n = lt.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 3).map((w) => w.replace(/s$/, '')).filter((w) => words.has(w)).length;
+          if (n > score) (score = n), (best = lt);
+        }
+        return best;
+      };
+      for (const c of m.chat) if (c.role === 'user') { const t = about(c.text); if (t) askedTopics[t] = (askedTopics[t] ?? 0) + 1; }
       const mine: RevisionItem[] = [
         ...(pack.cards ?? []).map((c): RevisionItem => ({ key: `${m.id}:${c.id}`, kind: 'card', topic: fold(c.topic), lectureId: m.id, lecture: m.title, front: c.front, back: c.back })),
         ...(pack.sbaqs ?? []).map((q): RevisionItem => ({ key: `${m.id}:${q.id}`, kind: 'sbaq', topic: fold(q.topic), lectureId: m.id, lecture: m.title, sbaq: q })),
@@ -1081,10 +1093,11 @@ const api: Api = {
       for (const p of lib.transcript(m.id))
         if (p.tag === 'confusing') {
           confusing.push({ meetingId: m.id, title: m.title, paraId: p.id, t: p.s, text: p.text.slice(0, 220) });
-          confusedTopics[fallback] = (confusedTopics[fallback] ?? 0) + 1;
+          const t = about(p.text) || fallback;
+          confusedTopics[t] = (confusedTopics[t] ?? 0) + 1;
         }
     }
-    const topics = topicStatus(items, practice, confusedTopics);
+    const topics = topicStatus(items, practice, confusedTopics, Date.now(), askedTopics);
     const weak = new Set(topics.filter((t) => t.state === 'needs').map((t) => t.topic));
     return { topics, session: pickSession(items, practice, weak, 15), practice, confusing, totals: { items: items.length, due: items.filter((x) => practice[x.key] && practice[x.key].due <= Date.now()).length, lectures, untestedLectures: untested } };
   },

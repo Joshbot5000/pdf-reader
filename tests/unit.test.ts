@@ -297,6 +297,10 @@ describe('law lecture intelligence', () => {
     const rows = topicStatus(items, p, { Acceptance: 2 }, now);
     expect(rows.map((r) => `${r.topic}:${r.state}`)).toEqual(['Offer:needs', 'Acceptance:needs', 'Consideration:untested']);
     expect(pickSession(items, p, new Set(['Offer']), 5, now + 864e5).map((x) => x.key)).toEqual(['c1', 'c3']);
+    // A topic answered well but asked about again and again is still a weak spot; unknown topics are ignored.
+    const asked = topicStatus(items, p, {}, now, { Acceptance: 3, Nowhere: 5 });
+    expect(asked.find((r) => r.topic === 'Acceptance')).toMatchObject({ state: 'needs', asked: 3 });
+    expect(asked.some((r) => r.topic === 'Nowhere')).toBe(false);
     expect(ankiExport([{ front: 'What is an offer?', back: 'A definite\npromise', topic: 'Offer & acceptance' }], 'Contract')).toBe('#separator:tab\n#html:true\n#deck:Contract\n#tags column:3\nWhat is an offer?\tA definite<br>promise\toffer_acceptance');
   });
 });

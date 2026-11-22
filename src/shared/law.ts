@@ -211,14 +211,17 @@ export function record(p: Practice, key: string, right: boolean, topic: string, 
 }
 
 export type TopicState = 'strong' | 'improving' | 'needs' | 'untested';
-export type TopicRow = { topic: string; state: TopicState; items: number; tested: number; accuracy: number; due: number; lastPractised: number; confusing: number; lectures: string[] };
+/** Questions to the tutor on one topic before it counts as a weak spot. */
+export const REPEATED = 3;
 
-/** One row per topic: how it is going, from practice history and "confusing" bookmarks. */
-export function topicStatus(items: { key: string; topic: string; lecture: string }[], practice: Practice, confusing: Record<string, number>, now = Date.now()): TopicRow[] {
+export type TopicRow = { topic: string; state: TopicState; items: number; tested: number; accuracy: number; due: number; lastPractised: number; confusing: number; asked: number; lectures: string[] };
+
+/** One row per topic: how it is going, from practice history, "confusing" bookmarks and how often the tutor was asked about it. */
+export function topicStatus(items: { key: string; topic: string; lecture: string }[], practice: Practice, confusing: Record<string, number>, now = Date.now(), asked: Record<string, number> = {}): TopicRow[] {
   const rows = new Map<string, TopicRow>();
   const row = (topic: string): TopicRow => {
     const k = topic.trim() || 'General';
-    if (!rows.has(k)) rows.set(k, { topic: k, state: 'untested', items: 0, tested: 0, accuracy: 0, due: 0, lastPractised: 0, confusing: 0, lectures: [] });
+    if (!rows.has(k)) rows.set(k, { topic: k, state: 'untested', items: 0, tested: 0, accuracy: 0, due: 0, lastPractised: 0, confusing: 0, asked: 0, lectures: [] });
     return rows.get(k)!;
   };
   const right = new Map<string, number>(), seen = new Map<string, number>(), boxes = new Map<string, number[]>();
@@ -236,12 +239,14 @@ export function topicStatus(items: { key: string; topic: string; lecture: string
     boxes.set(r.topic, [...(boxes.get(r.topic) ?? []), p.box]);
   }
   for (const [topic, n] of Object.entries(confusing)) row(topic).confusing += n;
+  // Asking the tutor about a topic again and again is a sign it has not clicked yet.
+  for (const [topic, n] of Object.entries(asked)) if (rows.has(topic.trim() || 'General')) row(topic).asked += n;
   for (const r of rows.values()) {
     const s = seen.get(r.topic) ?? 0;
     r.accuracy = s ? (right.get(r.topic) ?? 0) / s : 0;
     const b = boxes.get(r.topic) ?? [];
     const avgBox = b.length ? b.reduce((x, y) => x + y, 0) / b.length : 0;
-    r.state = !r.tested ? 'untested' : r.accuracy >= 0.8 && avgBox >= 2.5 && r.tested >= Math.min(5, r.items) && !r.confusing ? 'strong' : r.accuracy < 0.55 || r.confusing > 1 || avgBox < 1 ? 'needs' : 'improving';
+    r.state = !r.tested ? 'untested' : r.accuracy >= 0.8 && avgBox >= 2.5 && r.tested >= Math.min(5, r.items) && !r.confusing && r.asked < REPEATED ? 'strong' : r.accuracy < 0.55 || r.confusing > 1 || r.asked >= REPEATED || avgBox < 1 ? 'needs' : 'improving';
   }
   const order: Record<TopicState, number> = { needs: 0, untested: 1, improving: 2, strong: 3 };
   return [...rows.values()].sort((a, b) => order[a.state] - order[b.state] || (a.tested && b.tested ? a.accuracy - b.accuracy : 0) || b.due - a.due || a.topic.localeCompare(b.topic));

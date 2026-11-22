@@ -6,7 +6,7 @@ import { go, run, useStore } from '../store';
 import { Spinner, dayLabel } from '../ui/bits';
 import { fmtTime } from '../../../shared/text';
 import type { RevisionItem, RevisionOverview } from '../../../shared/api';
-import type { CaseRef, TopicState } from '../../../shared/law';
+import { REPEATED, type CaseRef, type TopicState } from '../../../shared/law';
 
 const STATE: Record<TopicState, [string, string]> = { needs: ['Needs revision', 'bad'], untested: ['Not yet tested', 'none'], improving: ['Improving', 'mid'], strong: ['Strong', 'good'] };
 const ago = (t: number): string => {
@@ -44,7 +44,7 @@ export function ReviseView() {
               <div key={t.topic} className={`topic ${STATE[t.state][1]}`}>
                 <b>{t.topic}</b>
                 <span className="chip">{STATE[t.state][0]}</span>
-                <p className="dim small">{t.tested ? `${Math.round(t.accuracy * 100)}% right · ` : ''}{t.tested}/{t.items} tried · practised {ago(t.lastPractised)}{t.due ? ` · ${t.due} due` : ''}{t.confusing ? ` · ${t.confusing} marked confusing` : ''}</p>
+                <p className="dim small">{t.tested ? `${Math.round(t.accuracy * 100)}% right · ` : ''}{t.tested}/{t.items} tried · practised {ago(t.lastPractised)}{t.due ? ` · ${t.due} due` : ''}{t.confusing ? ` · ${t.confusing} marked confusing` : ''}{t.asked >= REPEATED ? ` · asked the tutor ${t.asked} times` : ''}</p>
               </div>
             ))}
           </div>
