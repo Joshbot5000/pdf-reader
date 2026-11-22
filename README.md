@@ -25,6 +25,7 @@ It rebuilds the core of [Otter.ai](https://otter.ai) as a local desktop app.
 | **Insights** | Talk-time share, words per minute, turn-taking timeline |
 | **Export** | Markdown, PDF, plain text, subtitles (.srt), audio; copy notes or transcript |
 | **Organise** | Folders, stars, light and dark themes |
+| **Email** | When a conversation's notes are written, Hark can email you the key points, decisions, action items and open questions, sent straight from your own Gmail (with an app password) or through the Mac's Mail app. Settings → Email |
 | **Phone** | A phone app that records anywhere and sends the recording to your Mac to be transcribed, then shows the notes, plays the audio back and lets you chat and ask questions. See below |
 
 ## Installing on a Mac
@@ -132,6 +133,7 @@ npm run dev          # run with hot reload
 npm test             # unit tests (pause detection, speaker clustering, parsers, exports)
 npm run test:e2e     # drives the real app: sample → notes → chat → search → live recording
                      # (needs models already downloaded; point HARK_MODELS_DIR at them)
+npm run test:email   # transcribes the sample and emails its notes to a stand-in mail server
 npm run test:phone   # drives the phone app against the real desktop app (same model needs)
 npm run dist         # package for the current platform
 ```

@@ -396,3 +396,7 @@ h5 .dim { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .steps code { font: 12.5px var(--mono); background: var(--panel2); padding: 2px 7px; border-radius: 6px; user-select: text; cursor: text; color: var(--text); }
 .link-in { width: 100%; padding: 9px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); margin-bottom: 10px; font: 13px var(--mono); }
 .link-in:focus { border-color: var(--accent); }
+
+/* ---------- email ---------- */
+.email-state { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.chip.warn { color: var(--accent3); border-color: color-mix(in oklab, var(--accent3) 40%, transparent); cursor: help; }

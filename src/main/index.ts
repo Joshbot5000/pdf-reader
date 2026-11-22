@@ -13,6 +13,7 @@ import { normalize } from '../shared/speakers';
 import { retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
 import QRCode from 'qrcode';
 import { lanAddresses, servePhone, type PhoneServer, type UploadMeta } from './phone';
+import { checkGmail, notesEmail, sendGmail, sendWithMailApp, validEmail } from './mailer';
 import { uid } from '../shared/types';
 import type { Api, Events } from '../shared/api';
 import type { EngineStatus, Meeting, Para, PhoneInfo, Voice } from '../shared/types';
@@ -305,10 +306,66 @@ async function finish(m: Meeting, sess: TranscriptionSession, audio: Promise<boo
 async function afterTranscript(id: string): Promise<void> {
   await intel.index(id).catch(() => undefined);
   const m = lib.get(id);
-  if (lib.settings().autoSummary && models.installed(lib.settings().llmModel) && m.words >= 25) {
+  const s = lib.settings();
+  // Emailing the notes needs notes, so it writes them even if automatic notes are switched off.
+  if ((s.autoSummary || s.emailNotes) && models.installed(s.llmModel) && m.words >= 25) {
     await intel.summarize(id, `sum:${id}`).catch(() => undefined);
   }
+  if (s.emailNotes && lib.has(id) && lib.get(id).summary) await emailNotes(id).catch(() => undefined);
 }
+
+// ---------------------------------------------------------------- email
+
+const mailSecretFile = path.join(dataDir, 'mail-secret.json');
+const mailPassword = (): string => {
+  try {
+    return String(JSON.parse(fs.readFileSync(mailSecretFile, 'utf8')).pass ?? '');
+  } catch {
+    return '';
+  }
+};
+
+/** Where the notes go: the chosen address, or the sending Gmail address itself. */
+const emailTarget = (): string => {
+  const s = lib.settings();
+  return (s.emailTo.trim() || (s.emailVia === 'gmail' ? s.emailFrom.trim() : '')).trim();
+};
+
+async function deliver(mail: ReturnType<typeof notesEmail>): Promise<string> {
+  const s = lib.settings();
+  const to = emailTarget();
+  if (!validEmail(to)) throw new Error('Add the address to send notes to, in Settings → Email.');
+  if (s.emailVia === 'mail') await sendWithMailApp(to, mail);
+  else {
+    if (!validEmail(s.emailFrom) || !mailPassword()) throw new Error('Add your Gmail address and app password in Settings → Email.');
+    await sendGmail({ from: s.emailFrom.trim(), pass: mailPassword() }, to, mail);
+  }
+  return to;
+}
+
+const sending = new Set<string>();
+/** Email one conversation's notes. Failures are kept on the conversation and retried later. */
+async function emailNotes(id: string): Promise<Meeting> {
+  if (sending.has(id)) return lib.get(id);
+  sending.add(id);
+  try {
+    const to = await deliver(notesEmail(lib.get(id)));
+    return lib.update(id, { emailedAt: Date.now(), emailedTo: to, emailError: undefined });
+  } catch (err) {
+    if (lib.has(id)) lib.update(id, { emailError: err instanceof Error ? err.message : String(err) });
+    throw err;
+  } finally {
+    sending.delete(id);
+  }
+}
+
+// A send that failed (no internet, Mac asleep) is tried again, for up to two days.
+setInterval(() => {
+  if (!lib.settings().emailNotes) return;
+  for (const m of lib.list()) {
+    if (m.summary && !m.emailedAt && m.emailError && Date.now() - m.createdAt < 2 * 864e5 && !/Settings/.test(m.emailError)) void emailNotes(m.id).catch(() => undefined);
+  }
+}, Number(process.env.HARK_EMAIL_RETRY_MS) || 10 * 60e3).unref();
 
 /** Bookmarks made while recording become highlights on the paragraph being spoken. */
 function applyBookmarks(id: string): void {
@@ -440,7 +497,7 @@ async function startPhone(): Promise<void> {
           }),
           getTranscript: api.getTranscript, updateMeeting: api.updateMeeting, deleteMeeting: api.deleteMeeting, updatePara: api.updatePara,
           renameSpeaker: api.renameSpeaker, dismissHint: api.dismissHint, setSummary: api.setSummary, summarize: api.summarize,
-          chat: api.chat, clearChat: api.clearChat, ask: api.ask, clearAsk: api.clearAsk, abort: api.abort, search: api.search,
+          emailNotes: api.emailNotes, chat: api.chat, clearChat: api.clearChat, ask: api.ask, clearAsk: api.clearAsk, abort: api.abort, search: api.search,
         },
       },
       PHONE_PORT,
@@ -678,6 +735,28 @@ const api: Api = {
     if (process.platform !== 'darwin') return true;
     if (systemPreferences.getMediaAccessStatus('microphone') === 'granted') return true;
     return systemPreferences.askForMediaAccess('microphone');
+  },
+  emailNotes: (id) => emailNotes(id),
+  saveEmailPassword: async (pass) => {
+    const clean = pass.replace(/\s+/g, '');
+    if (!clean) {
+      fs.rmSync(mailSecretFile, { force: true });
+      return { saved: false };
+    }
+    const from = lib.settings().emailFrom.trim();
+    if (!validEmail(from)) throw new Error('Enter your Gmail address first.');
+    await checkGmail({ from, pass: clean });
+    fs.writeFileSync(mailSecretFile, JSON.stringify({ pass: clean }), { mode: 0o600 });
+    return { saved: true };
+  },
+  emailStatus: async () => ({ hasPassword: !!mailPassword() }),
+  testEmail: async () => {
+    const now = Date.now();
+    const sample = {
+      title: 'Test from Hark', createdAt: now, duration: 0, speakers: [], template: 'meeting',
+      summary: { title: 'Test from Hark', overview: 'If you can read this, Hark will email you the notes from each conversation as soon as they are written.', keyPoints: ['Emailing notes is set up and working.'], actions: [], decisions: [], questions: [], chapters: [], topics: [], cards: [], template: 'meeting' },
+    } as unknown as Meeting;
+    await deliver(notesEmail(sample));
   },
   phoneInfo: async () => {
     const s = lib.settings();

@@ -68,6 +68,11 @@ export type Meeting = {
   hasAudio: boolean;
   /** Names the AI worked out from the conversation, awaiting the user's confirmation. speaker id -> name */
   nameHints?: Record<string, string>;
+  /** When the notes were emailed, and to whom. */
+  emailedAt?: number;
+  emailedTo?: string;
+  /** Why the last attempt to email them failed (cleared once sent). */
+  emailError?: string;
 };
 
 export type Voice = { id: string; name: string; color: number; vec: number[]; samples: number };
@@ -86,6 +91,14 @@ export type Settings = {
   phone: boolean;
   /** Optional secure (https) address for the phone, e.g. from Tailscale. */
   phoneLink: string;
+  /** Email the notes of every conversation once they are written. */
+  emailNotes: boolean;
+  /** Where the notes go. */
+  emailTo: string;
+  /** How they are sent: from a Gmail account (app password), or through the Mail app. */
+  emailVia: 'gmail' | 'mail';
+  /** The Gmail address that sends them (its app password is stored separately). */
+  emailFrom: string;
 };
 
 export type ModelKind = 'asr' | 'llm' | 'support';
@@ -135,6 +148,10 @@ export const DEFAULT_SETTINGS: Settings = {
   userName: '',
   phone: true,
   phoneLink: '',
+  emailNotes: false,
+  emailTo: '',
+  emailVia: 'gmail',
+  emailFrom: '',
 };
 
 export const LANGUAGES: [string, string][] = [

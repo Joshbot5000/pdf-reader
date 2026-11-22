@@ -46,6 +46,13 @@ export type Api = {
   openDataFolder(): Promise<void>;
   micAccess(): Promise<boolean>;
   phoneInfo(): Promise<PhoneInfo>;
+  /** Email one conversation's notes now. */
+  emailNotes(id: string): Promise<Meeting>;
+  /** Save (and check) the Gmail app password; an empty one removes it. */
+  saveEmailPassword(pass: string): Promise<{ saved: boolean }>;
+  emailStatus(): Promise<{ hasPassword: boolean }>;
+  /** Send a test email with the current settings. */
+  testEmail(): Promise<void>;
 };
 
 export type Events = {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Ellipsis, Pause, Pencil, Play, RefreshCw, RotateCcw, RotateCw, Share, Sparkles, Star, Trash2 } from 'lucide-react';
+import { ChevronLeft, Ellipsis, Mail, Pause, Pencil, Play, RefreshCw, RotateCcw, RotateCw, Share, Sparkles, Star, Trash2 } from 'lucide-react';
 import { Avatar, Md, Spinner, clock, colorOf, relDay } from '../../renderer/src/ui/bits';
 import { fmtDuration, fmtTime, toMarkdown } from '../../shared/text';
 import { TEMPLATES } from '../../shared/summaryFormat';
@@ -184,6 +184,7 @@ export function MeetingScreen({ id }: { id: string }) {
             <i className="grip" />
             <button onClick={rename}><Pencil size={18} /> Rename</button>
             <button onClick={() => void share()}><Share size={18} /> Share notes and transcript</button>
+            {m.summary && <button onClick={() => void run(call('emailNotes', id)).then((r) => r && toast('Notes emailed.'))}><Mail size={18} /> {m.emailedAt ? 'Email the notes again' : 'Email the notes'}</button>}
             {m.status === 'ready' && m.words >= 25 && <button onClick={() => rewrite(m)}><RefreshCw size={18} /> Write the notes again</button>}
             <button className="danger" onClick={() => confirm(`Delete “${m.title}” from your library? This removes it from your Mac too.`) && void run(call('deleteMeeting', id)).then(closeMeeting)}><Trash2 size={18} /> Delete</button>
           </div>

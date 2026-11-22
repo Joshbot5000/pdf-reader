@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Cpu, Download, FolderOpen, Mic, Smartphone, Sparkles, Trash2, UserRound, X } from 'lucide-react';
+import { Check, Cpu, Download, FolderOpen, Mail, Mic, Smartphone, Sparkles, Trash2, UserRound, X } from 'lucide-react';
 import { api } from '../api';
 import { run, saveSettings, set, useStore } from '../store';
 import { Avatar, gb } from '../ui/bits';
@@ -57,6 +57,7 @@ export function Settings() {
           <button className={tab === 'models' ? 'on' : ''} onClick={() => set({ settingsOpen: 'models' })}><Cpu size={15} /> AI models</button>
           <button className={tab === 'voices' ? 'on' : ''} onClick={() => set({ settingsOpen: 'voices' })}><UserRound size={15} /> Voices</button>
           <button className={tab === 'phone' ? 'on' : ''} onClick={() => set({ settingsOpen: 'phone' })}><Smartphone size={15} /> Phone</button>
+          <button className={tab === 'email' ? 'on' : ''} onClick={() => set({ settingsOpen: 'email' })}><Mail size={15} /> Email</button>
           <span className="grow" />
           <p className="dim small">Hark {version}<br />{status.ramGb} GB memory{status.gpu ? ` · ${status.gpu === 'metal' ? 'Apple GPU' : status.gpu.toUpperCase()}` : ''}</p>
         </aside>
@@ -105,9 +106,69 @@ export function Settings() {
             </>
           )}
           {tab === 'phone' && <PhoneTab />}
+          {tab === 'email' && <EmailTab />}
         </section>
       </div>
     </div>
+  );
+}
+
+/** Email the notes of each conversation as soon as they are written. */
+function EmailTab() {
+  const s = useStore((x) => x.settings);
+  const [to, setTo] = useState(s.emailTo);
+  const [from, setFrom] = useState(s.emailFrom);
+  const [pass, setPass] = useState('');
+  const [hasPass, setHasPass] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => void api.emailStatus().then((r) => setHasPass(r.hasPassword)), []);
+  const ok = (v: string) => /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$/.test(v.trim());
+  const ready = (s.emailVia === 'mail' || (ok(s.emailFrom) && hasPass)) && ok(s.emailTo || s.emailFrom);
+  const attempt = async (label: string, job: () => Promise<unknown>, done: string) => {
+    setBusy(true);
+    setMsg({ text: label });
+    try {
+      await job();
+      setMsg({ text: done });
+    } catch (e) {
+      setMsg({ text: (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), bad: true });
+    }
+    setBusy(false);
+  };
+  const savePass = () => attempt('Checking with Gmail…', async () => {
+    await saveSettings({ emailFrom: from.trim() });
+    await api.saveEmailPassword(pass);
+    setPass('');
+    setHasPass(true);
+  }, 'Signed in. Gmail accepted the app password.');
+  return (
+    <>
+      <h3>Email your notes</h3>
+      <p className="lead">When a conversation's notes are written, Hark emails you the key points, decisions, action items and open questions. The email goes straight from your own account; nothing passes through anyone else.</p>
+      <label className="field"><span>Email notes automatically<i>{ready ? 'Every conversation, as soon as its notes are written.' : 'Finish setting up below first.'}</i></span><Toggle on={s.emailNotes} set={(v) => void saveSettings({ emailNotes: v })} /></label>
+      <label className="field"><span>Send them to<i>Your own address, or anyone's.{s.emailVia === 'gmail' ? ' Leave empty to send to the Gmail address below.' : ''}</i></span><input value={to} type="email" placeholder="you@gmail.com" spellCheck={false} onChange={(e) => setTo(e.target.value)} onBlur={() => void saveSettings({ emailTo: to.trim() })} /></label>
+      <label className="field"><span>Send using</span>
+        <div className="seg">{(['gmail', 'mail'] as const).map((v) => <button key={v} className={s.emailVia === v ? 'on' : ''} onClick={(e) => (e.preventDefault(), void saveSettings({ emailVia: v }))}>{v === 'gmail' ? 'My Gmail' : 'The Mail app'}</button>)}</div>
+      </label>
+      {s.emailVia === 'gmail' ? (
+        <>
+          <label className="field"><span>Your Gmail address</span><input value={from} type="email" placeholder="you@gmail.com" spellCheck={false} onChange={(e) => setFrom(e.target.value)} onBlur={() => void saveSettings({ emailFrom: from.trim() })} /></label>
+          <label className="field"><span>App password<i>{hasPass ? 'Saved on this computer. Paste a new one to replace it.' : 'A 16-letter password Google makes for Hark. Your normal password will not work.'}</i></span><input value={pass} type="password" placeholder={hasPass ? '•••• •••• •••• ••••' : 'abcd efgh ijkl mnop'} onChange={(e) => setPass(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pass.trim() && void savePass()} /></label>
+          <div className="row"><button className="btn small primary" disabled={busy || !pass.trim() || !ok(from)} onClick={() => void savePass()}>Save and check</button>{hasPass && <button className="btn ghost small danger" onClick={() => void api.saveEmailPassword('').then(() => (setHasPass(false), setMsg({ text: 'Removed.' })))}>Remove password</button>}</div>
+          <ol className="steps">
+            <li>Turn on <b>2-Step Verification</b> for your Google account, if it isn't already: <a href="https://myaccount.google.com/signinoptions/twosv" target="_blank" rel="noreferrer">myaccount.google.com/signinoptions/twosv</a></li>
+            <li>Open <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">myaccount.google.com/apppasswords</a>, type <b>Hark</b> as the name and click <b>Create</b>.</li>
+            <li>Copy the 16 letters Google shows, paste them above and click <b>Save and check</b>.</li>
+          </ol>
+          <p className="dim small">If Google says app passwords aren't available for your account, choose <b>The Mail app</b> above instead and add your Google account to the Mail app on this Mac.</p>
+        </>
+      ) : (
+        <p className="lead">Hark asks the Mail app on this Mac to send each email, from its default account. The first time, macOS asks whether Hark may control Mail: click <b>Allow</b>. Mail needs an account set up (System Settings → Internet Accounts, or Mail → Add Account).</p>
+      )}
+      <div className="row"><button className="btn small" disabled={busy || !ready} onClick={() => void attempt('Sending a test email…', () => api.testEmail(), `Sent. Check ${s.emailTo || s.emailFrom || 'your inbox'} (and the spam folder, the first time).`)}><Mail size={13} /> Send a test email</button></div>
+      {msg && <p className={msg.bad ? 'err-text' : 'dim small'}>{msg.text}</p>}
+    </>
   );
 }
 

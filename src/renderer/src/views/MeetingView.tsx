@@ -7,6 +7,7 @@ import { TemplatePicker } from './Home';
 import { toggleAction } from './Tasks';
 import { fmtDuration, fmtTime, toMarkdown, toText } from '../../../shared/text';
 import { TEMPLATES, parseSummary } from '../../../shared/summaryFormat';
+import { Mail } from 'lucide-react';
 import type { Meeting, Para, Speaker, Summary, TemplateId } from '../../../shared/types';
 
 type Seek = (t: number, play?: boolean) => void;
@@ -458,6 +459,7 @@ function SummaryTab({ m, seek, hasText }: { m: Meeting; seek: Seek; hasText: boo
       {!running && s && (
         <footer className="sum-foot">
           <span className="dim">{TEMPLATES[s.template].name} notes{s.model ? ` · ${s.model} model` : ''} · written on this computer</span>
+          <EmailState m={m} />
           <Popover align="right" trigger={(_o, t) => <button className="btn ghost small" onClick={t}><RotateCw size={13} /> Rewrite</button>}>
             {(close) => (
               <div className="menu">
@@ -469,6 +471,30 @@ function SummaryTab({ m, seek, hasText }: { m: Meeting; seek: Seek; hasText: boo
         </footer>
       )}
     </div>
+  );
+}
+
+/** Whether these notes were emailed, and a button to (re)send them. */
+function EmailState({ m }: { m: Meeting }) {
+  const on = useStore((x) => x.settings.emailNotes);
+  const [busy, setBusy] = useState(false);
+  const send = async () => {
+    setBusy(true);
+    try {
+      await api.emailNotes(m.id);
+      toast('Notes emailed.');
+    } catch (e) {
+      toast((e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), 'error');
+    }
+    setBusy(false);
+  };
+  return (
+    <span className="email-state">
+      {m.emailedAt ? <span className="chip ok" title={`Sent ${new Date(m.emailedAt).toLocaleString()}`}><Check size={11} /> Emailed{m.emailedTo ? ` to ${m.emailedTo}` : ''}</span>
+        : m.emailError ? <span className="chip warn" title={m.emailError}>Not emailed yet</span>
+        : on ? <span className="chip"><Spinner size={10} /> Emailing</span> : null}
+      <button className="btn ghost small" disabled={busy} onClick={() => void send()} title={m.emailError ?? 'Email these notes'}>{busy ? <Spinner size={12} /> : <Mail size={13} />} {m.emailedAt ? 'Email again' : 'Email notes'}</button>
+    </span>
   );
 }
 
