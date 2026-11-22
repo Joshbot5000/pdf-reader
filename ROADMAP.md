@@ -44,6 +44,7 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
          slide cases the lecturer skipped; the tutor cites them as [file, slide N] (tests/materials.test.ts; live run)
    - [x] Knowledge gaps also count repeated tutor questions per lecture topic (3+ = needs revision) and file
          "confusing" bookmarks under the topic they are about (unit test; checked on live data)
+   - [x] PDF export of study notes (Notes pane: Copy, .md, Word, PDF) (unit test; live export checked with pdftotext)
    - [x] Keyboard: J/K/arrows + Enter in the library, [ ] playback speed, Esc goes back, ? shows all shortcuts (live 8/8)
    - [x] Tags (header # button, sidebar list, click a tag on a card to filter), archive (hidden from the list,
          sidebar "Archived"), Revision and Case bank filtered by module folder (scratch live test 9/9)
@@ -61,8 +62,8 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 - tests/recover.mjs (crash recovery), tests/email.mjs, tests/groq.mjs, tests/phone.mjs still pass.
 
 ## Known limits / next tasks
-- Exact next task: PDF export of the study notes (Word and Markdown exist), then checking legislation against
-  legislation.gov.uk's own data (Act found, section exists, section text shown) instead of only a search link.
+- Exact next task: check legislation against legislation.gov.uk's own data (Act found, section exists, section text
+  shown) instead of only a search link.
 - Scanned PDFs (images only) are refused with a clear message: there is no OCR.
 - Groq free plan is ~8,000 tokens/minute per model: long lectures are analysed in parts with waits (minutes, not seconds).
 - "Research" tutor mode has no web search; it uses general knowledge, clearly labelled, and points to where to verify.

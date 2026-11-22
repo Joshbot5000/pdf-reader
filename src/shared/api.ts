@@ -68,7 +68,7 @@ export type Api = {
   /** The revision dashboard, for every lecture or for one folder (module). */
   revisionOverview(folder?: string): Promise<RevisionOverview>;
   caseBank(): Promise<{ c: CaseRef; meetingId: string; title: string; date: number }[]>;
-  exportStudy(id: string, what: 'notes' | 'notes-docx' | 'anki' | 'all-anki'): Promise<string | null>;
+  exportStudy(id: string, what: 'notes' | 'notes-docx' | 'notes-pdf' | 'anki' | 'all-anki'): Promise<string | null>;
   /** Email one conversation's notes now. */
   emailNotes(id: string): Promise<Meeting>;
   /** Save (and check) the Gmail app password; an empty one removes it. */

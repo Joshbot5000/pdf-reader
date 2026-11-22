@@ -11,7 +11,7 @@ import { Models, entry, recommendedLlm } from './models';
 import { TranscriptionSession, type SpeechApi } from './pipeline';
 import { Intelligence } from './intelligence';
 import { normalize } from '../shared/speakers';
-import { retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
+import { markdownToHtml, retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
 import QRCode from 'qrcode';
 import { lanAddresses, servePhone, type PhoneNotes, type PhoneServer, type UploadMeta } from './phone';
 import { PeakMeter } from '../shared/vad';
@@ -920,15 +920,7 @@ const api: Api = {
     const paras = lib.transcript(id);
     if (format === 'audio') return saveWithDialog(m.title, 'webm', (f) => fs.copyFileSync(lib.audioPath(id), f));
     if (format === 'pdf')
-      return saveWithDialog(m.title, 'pdf', async (f) => {
-        const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
-        try {
-          await w.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(toHtml(m, paras))}`);
-          fs.writeFileSync(f, await w.webContents.printToPDF({ pageSize: 'A4', margins: { top: 0.7, bottom: 0.7, left: 0.75, right: 0.75 } }));
-        } finally {
-          w.destroy();
-        }
-      });
+      return saveWithDialog(m.title, 'pdf', (f) => printPdf(toHtml(m, paras), f));
     if (format === 'docx') return saveWithDialog(m.title, 'docx', async (f) => fs.writeFileSync(f, await markdownToDocx(toMarkdown(m, paras), m.title)));
     const text = format === 'md' ? toMarkdown(m, paras) : format === 'srt' ? toSrt(paras, m.speakers) : toText(m, paras);
     return saveWithDialog(m.title, format, (f) => fs.writeFileSync(f, text));
@@ -1115,6 +1107,7 @@ const api: Api = {
       return saveWithDialog(`${m.title} flashcards`, 'txt', (f) => fs.writeFileSync(f, ankiExport(pack.cards!, `Hark::${m.title}`)));
     }
     if (!pack.notes) throw new Error('Write the notes first.');
+    if (what === 'notes-pdf') return saveWithDialog(`${m.title} notes`, 'pdf', (f) => printPdf(markdownToHtml(pack.notes!.text, m.title), f));
     if (what === 'notes-docx') return saveWithDialog(`${m.title} notes`, 'docx', async (f) => fs.writeFileSync(f, await markdownToDocx(pack.notes!.text, m.title)));
     return saveWithDialog(`${m.title} notes`, 'md', (f) => fs.writeFileSync(f, pack.notes!.text));
   },
@@ -1180,6 +1173,17 @@ function serveMedia(request: Request): Response {
       ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
     },
   });
+}
+
+/** Print HTML to an A4 PDF with a hidden window (no scripts run). */
+async function printPdf(html: string, file: string): Promise<void> {
+  const w = new BrowserWindow({ show: false, webPreferences: { sandbox: true, javascript: false } });
+  try {
+    await w.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    fs.writeFileSync(file, await w.webContents.printToPDF({ pageSize: 'A4', margins: { top: 0.7, bottom: 0.7, left: 0.75, right: 0.75 } }));
+  } finally {
+    w.destroy();
+  }
 }
 
 function buildMenu(): void {

@@ -48,3 +48,16 @@ describe('Word handouts', () => {
     expect(materialCases([m])[0].name).toMatch(/^Royscot Trust v Rogerson/);
   });
 });
+
+describe('notes as PDF', () => {
+  it('turns markdown notes into printable HTML', async () => {
+    const { markdownToHtml } = await import('../src/shared/text');
+    const html = markdownToHtml('# Offer\n\n- **Rule**: an offer [1:05]\n  - nested <b>\n1. first\n\n| Case | Point |\n|---|---|\n| Fisher v Bell | display |\n\n> quote', 'Offer');
+    expect(html).toContain('<h1>Offer</h1>');
+    expect(html).toContain('<li><b>Rule</b>: an offer <code>[1:05]</code></li>');
+    expect(html).toMatch(/<ul>\n<li>nested &lt;b&gt;<\/li>\n<\/ul>/);
+    expect(html).toContain('<ol>');
+    expect(html).toContain('<th>Case</th>');
+    expect(html).toContain('<blockquote>quote</blockquote>');
+  });
+});

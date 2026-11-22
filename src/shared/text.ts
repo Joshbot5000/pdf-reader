@@ -178,3 +178,59 @@ export function toHtml(m: Meeting, paras: Para[]): string {
     .turn p{margin:1pt 0 0} .hl{background:#fff3b8} blockquote{margin:3pt 0 0 10pt;color:#555;border-left:2pt solid #ccc;padding-left:6pt}
   </style></head><body>${body}</body></html>`;
 }
+
+/** Markdown notes as print-ready HTML (PDF export of study notes): headings, nested lists, tables, quotes, emphasis. */
+export function markdownToHtml(md: string, title: string): string {
+  const inline = (t: string) =>
+    esc(t)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\\?\[(\d{1,2}:\d{2}(?::\d{2})?)\\?\]/g, '<code>[$1]</code>');
+  const out: string[] = [];
+  const stack: { tag: 'ul' | 'ol'; indent: number }[] = [];
+  const closeLists = (indent = -1) => {
+    while (stack.length && stack[stack.length - 1].indent > indent) out.push(`</${stack.pop()!.tag}>`);
+  };
+  let table: string[][] | null = null;
+  const flushTable = () => {
+    if (table?.length) out.push(`<table>${table.map((r, i) => `<tr>${r.map((c) => (i === 0 ? `<th>${inline(c)}</th>` : `<td>${inline(c)}</td>`)).join('')}</tr>`).join('')}</table>`);
+    table = null;
+  };
+  for (const raw of md.split('\n')) {
+    const line = raw.trimEnd();
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      closeLists();
+      const cells = line.trim().slice(1, -1).split('|').map((c) => c.trim());
+      if (!cells.every((c) => /^:?-{2,}:?$/.test(c))) (table ??= []).push(cells);
+      continue;
+    }
+    flushTable();
+    const item = line.match(/^(\s*)([-*•]|\d+[.)])\s+(.*)$/);
+    if (item) {
+      const indent = item[1].length;
+      const tag = /\d/.test(item[2]) ? 'ol' : 'ul';
+      closeLists(indent);
+      if (stack.length && stack[stack.length - 1].indent === indent && stack[stack.length - 1].tag !== tag) out.push(`</${stack.pop()!.tag}>`);
+      if (!stack.length || stack[stack.length - 1].indent < indent) (stack.push({ tag, indent }), out.push(`<${tag}>`));
+      out.push(`<li>${inline(item[3])}</li>`);
+      continue;
+    }
+    closeLists();
+    if (!line.trim() || /^\s*(-{3,}|\*{3,})\s*$/.test(line)) continue;
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+    else if (/^\s*>/.test(line)) out.push(`<blockquote>${inline(line.replace(/^\s*>\s?/, ''))}</blockquote>`);
+    else out.push(`<p>${inline(line)}</p>`);
+  }
+  flushTable();
+  closeLists();
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+    body{font:11pt/1.55 -apple-system,"Helvetica Neue",Arial,sans-serif;color:#16181d;margin:0}
+    h1{font:600 20pt Georgia,serif;margin:0 0 8pt} h2{font:600 13pt sans-serif;margin:16pt 0 6pt;color:#4b3fd1;break-after:avoid}
+    h3{font:600 11.5pt sans-serif;margin:12pt 0 4pt;break-after:avoid} h4{font:600 11pt sans-serif;margin:10pt 0 3pt}
+    p{margin:4pt 0} ul,ol{padding-left:16pt;margin:2pt 0} li{margin:2pt 0} code{font:9pt ui-monospace,Menlo,monospace;color:#777}
+    table{border-collapse:collapse;margin:6pt 0;width:100%} th,td{border:1px solid #ccc;padding:3pt 5pt;text-align:left;vertical-align:top;font-size:10pt} th{background:#f2f0fb}
+    blockquote{margin:4pt 0 4pt 10pt;color:#444;border-left:2pt solid #b9b2ee;padding-left:6pt;font-style:italic}
+  </style></head><body>${out.join('\n')}</body></html>`;
+}
