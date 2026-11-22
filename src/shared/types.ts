@@ -73,6 +73,8 @@ export type Meeting = {
   emailedTo?: string;
   /** Why the last attempt to email them failed (cleared once sent). */
   emailError?: string;
+  /** Set when the recording was rescued after Hark closed unexpectedly. */
+  recovered?: boolean;
 };
 
 export type Voice = { id: string; name: string; color: number; vec: number[]; samples: number };
@@ -99,6 +101,12 @@ export type Settings = {
   emailVia: 'gmail' | 'mail';
   /** The Gmail address that sends them (its app password is stored separately). */
   emailFrom: string;
+  /** The microphone to record from (empty: the system default). */
+  micId: string;
+  /** Global shortcut that starts and stops a recording from any app. Empty turns it off. */
+  recordShortcut: string;
+  /** Show notifications when recording starts, stops and when notes are ready. */
+  notify: boolean;
 };
 
 export type ModelKind = 'asr' | 'llm' | 'support';
@@ -152,6 +160,9 @@ export const DEFAULT_SETTINGS: Settings = {
   emailTo: '',
   emailVia: 'gmail',
   emailFrom: '',
+  micId: '',
+  recordShortcut: 'CommandOrControl+Shift+R',
+  notify: true,
 };
 
 export const LANGUAGES: [string, string][] = [

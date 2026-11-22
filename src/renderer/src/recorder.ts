@@ -44,7 +44,18 @@ export async function startRecording(template: TemplateId, withSystemAudio = fal
   const streams: MediaStream[] = [];
   try {
     if (!(await api.micAccess())) throw new Error('Hark needs microphone access. Allow it in System Settings → Privacy & Security → Microphone.');
-    streams.push(await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: !withSystemAudio, noiseSuppression: true, autoGainControl: true, channelCount: 1 } }));
+    const opts = { echoCancellation: !withSystemAudio, noiseSuppression: true, autoGainControl: true, channelCount: 1 };
+    const chosen = get().settings.micId;
+    let mic: MediaStream;
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({ audio: chosen ? { ...opts, deviceId: { exact: chosen } } : opts });
+    } catch (err) {
+      if (!chosen) throw err;
+      // The chosen microphone is unplugged: record from the default one rather than not at all.
+      mic = await navigator.mediaDevices.getUserMedia({ audio: opts });
+      toast('The chosen microphone is not connected, so Hark is using the default one.', 'error');
+    }
+    streams.push(mic);
     let system = false;
     if (withSystemAudio) {
       try {

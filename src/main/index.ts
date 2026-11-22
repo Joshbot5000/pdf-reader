@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, clipboard, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, session, shell, systemPreferences, utilityProcess } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, nativeImage, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, session, shell, systemPreferences, utilityProcess } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -312,6 +312,7 @@ async function afterTranscript(id: string): Promise<void> {
   if ((s.autoSummary || s.emailNotes) && models.installed(s.llmModel) && m.words >= 25) {
     await intel.summarize(id, `sum:${id}`).catch(() => undefined);
   }
+  if (lib.has(id) && lib.get(id).summary && !win?.isFocused()) tell('Notes ready', `“${lib.get(id).title}” has been transcribed and written up.`);
   if (s.emailNotes && lib.has(id) && lib.get(id).summary) await emailNotes(id).catch(() => undefined);
 }
 
@@ -392,6 +393,98 @@ function applyBookmarks(id: string): void {
 }
 
 let importChain: Promise<void> = Promise.resolve();
+
+/**
+ * A recording cut short by a crash, power loss or force-quit leaves its audio in audio.rec.webm
+ * (written every two seconds while recording). Re-attach it and transcribe the whole thing again,
+ * so nothing said is lost even if the live transcript stopped early.
+ */
+function recoverInterrupted(): void {
+  for (const m of lib.list()) {
+    const raw = path.join(lib.folder(m.id), 'audio.rec.webm');
+    if (live.has(m.id) || !fs.existsSync(raw)) continue;
+    if (fs.statSync(raw).size < 2000) {
+      fs.rmSync(raw, { force: true });
+      continue;
+    }
+    lib.update(m.id, { status: 'processing', progress: 0, error: undefined, recovered: true });
+    importChain = importChain.then(async () => {
+      if (!lib.has(m.id)) return;
+      try {
+        await runImport(lib.get(m.id), raw);
+        fs.rmSync(raw, { force: true });
+        tell('Recording recovered', `“${lib.get(m.id).title}” was interrupted. Hark has rescued the audio and transcribed it in full.`);
+      } catch (err) {
+        // Keep the raw file: it can still be recovered later or exported by hand.
+        if (lib.has(m.id)) lib.update(m.id, { status: 'error', progress: undefined, error: `The recording was interrupted and could not be transcribed yet (${err instanceof Error ? err.message : String(err)}). The audio is safe in its folder; Hark will try again next time it opens.` });
+      }
+    });
+  }
+}
+
+/** A system notification (if switched on). */
+function tell(title: string, body: string): void {
+  if (!lib.settings().notify || !Notification.isSupported()) return;
+  try {
+    new Notification({ title, body, silent: true }).show();
+  } catch {
+    /* notifications are a courtesy */
+  }
+}
+
+// ---------------------------------------------------------------- menu bar and shortcut
+
+let tray: Tray | null = null;
+let trayTimer: ReturnType<typeof setInterval> | null = null;
+let recStartedAt = 0;
+const recording = (): boolean => [...live.keys()].some((id) => lib.has(id) && lib.get(id).status === 'recording');
+
+function updateTray(): void {
+  if (!tray) return;
+  const on = recording();
+  const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  // The menu bar shows a red dot and the time while recording, so it is never silent.
+  tray.setTitle(on ? ` ● ${mmss((Date.now() - recStartedAt) / 1000)}` : '');
+  tray.setToolTip(on ? 'Hark is recording' : 'Hark');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      on ? { label: 'Stop recording', click: () => send('command', 'stop-record') } : { label: 'Start recording', accelerator: lib.settings().recordShortcut || undefined, click: () => (showWindow(), send('command', 'record')) },
+      { label: 'Open Hark', click: showWindow },
+      { type: 'separator' },
+      { label: 'Quit Hark', role: 'quit' },
+    ]),
+  );
+  if (on && !trayTimer) trayTimer = setInterval(updateTray, 1000);
+  if (!on && trayTimer) (clearInterval(trayTimer), (trayTimer = null));
+}
+
+function showWindow(): void {
+  if (!win) createWindow();
+  else (win.isMinimized() && win.restore(), win.show(), win.focus());
+}
+
+function makeTray(): void {
+  try {
+    const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png')).resize({ width: 18, height: 18 });
+    tray = new Tray(icon);
+    updateTray();
+  } catch {
+    /* no menu bar on this system */
+  }
+}
+
+let shortcut = '';
+function setShortcut(accel: string): void {
+  if (accel === shortcut) return;
+  if (shortcut) globalShortcut.unregister(shortcut);
+  shortcut = '';
+  if (!accel) return;
+  try {
+    if (globalShortcut.register(accel, () => (recording() ? send('command', 'stop-record') : (showWindow(), send('command', 'record'))))) shortcut = accel;
+  } catch {
+    /* not a valid shortcut: leave it off */
+  }
+}
 
 async function runImport(m: Meeting, file: string): Promise<void> {
   await ensureAsr();
@@ -649,6 +742,9 @@ const api: Api = {
     const m = lib.create({ source: 'mic', status: 'recording', template, title: 'Recording…' });
     const blob = fs.createWriteStream(path.join(lib.folder(m.id), 'audio.rec.webm'));
     live.set(m.id, { session: newSession(m, true), blob, lastSave: Date.now() });
+    recStartedAt = Date.now();
+    updateTray();
+    tell('Recording', 'Hark is recording. Stop it from the menu bar or the app.');
     return m;
   },
   recAudio: (id, pcm) => {
@@ -667,6 +763,8 @@ const api: Api = {
     const m = lib.get(id);
     if (!l) return m;
     lib.update(id, { status: 'processing', duration: l.session.duration, title: defaultTitle(m) });
+    setTimeout(updateTray, 50);
+    tell('Recording stopped', `${Math.round(l.session.duration / 60)} min saved. Hark is finishing the transcript and notes.`);
     const raw = path.join(lib.folder(id), 'audio.rec.webm');
     const audio = new Promise<void>((r) => (l.blob ? l.blob.end(() => r()) : r())).then(async () => {
       if (!fs.existsSync(raw) || fs.statSync(raw).size < 200) return false;
@@ -741,6 +839,7 @@ const api: Api = {
     const before = lib.settings();
     const s = lib.saveSettings(patch);
     if (patch.theme) nativeTheme.themeSource = s.theme;
+    if (patch.recordShortcut !== undefined) setShortcut(s.recordShortcut);
     if (patch.phone !== undefined) {
       if (s.phone) await startPhone();
       else stopPhone();
@@ -928,6 +1027,9 @@ else {
     createWindow();
     refreshStatus();
     void startPhone();
+    makeTray();
+    setShortcut(lib.settings().recordShortcut);
+    setTimeout(recoverInterrupted, 1500);
     // Load the speech model right away so the first recording starts instantly; the language model shortly after.
     void warmSpeech();
     if (!lowMemory) setTimeout(() => void ensureLlm().catch(() => undefined), 2500);
@@ -946,6 +1048,7 @@ else {
       lib.update(id, { speakers: l.session.speakers, duration: l.session.duration });
     }
     stopPhone();
+    globalShortcut.unregisterAll();
     speech.stop();
     llm.stop();
   });

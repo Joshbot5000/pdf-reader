@@ -75,6 +75,9 @@ export function Settings() {
               </label>
               <label className="field"><span>Write notes automatically<i>Summarise every conversation as soon as it is transcribed.</i></span><Toggle on={settings.autoSummary} set={(v) => void saveSettings({ autoSummary: v })} /></label>
               <label className="field"><span>Remember voices<i>When you name a speaker, recognise them in future conversations.</i></span><Toggle on={settings.rememberVoices} set={(v) => void saveSettings({ rememberVoices: v })} /></label>
+              <MicPicker />
+              <label className="field"><span>Record shortcut<i>Starts and stops a recording from any app. Shown in the menu bar while recording.</i></span><input defaultValue={settings.recordShortcut} placeholder="Off" spellCheck={false} onBlur={(e) => void saveSettings({ recordShortcut: e.target.value.trim() })} /></label>
+              <label className="field"><span>Notifications<i>When a recording starts or stops, when notes are ready, and when an interrupted recording is rescued.</i></span><Toggle on={settings.notify} set={(v) => void saveSettings({ notify: v })} /></label>
               <label className="field"><span>Your library<i>Recordings, transcripts and notes live in a folder on this computer.</i></span><button className="btn small" onClick={() => void api.openDataFolder()}><FolderOpen size={14} /> Show in folder</button></label>
             </>
           )}
@@ -250,6 +253,26 @@ function PhoneTab() {
         )
       )}
     </>
+  );
+}
+
+/** Pick the microphone (the list fills in once Hark has been allowed to use one). */
+function MicPicker() {
+  const micId = useStore((s) => s.settings.micId);
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  useEffect(() => {
+    const load = () => void navigator.mediaDevices?.enumerateDevices().then((d) => setMics(d.filter((x) => x.kind === 'audioinput' && x.deviceId !== 'default' && x.deviceId !== 'communications')));
+    load();
+    navigator.mediaDevices?.addEventListener('devicechange', load);
+    return () => navigator.mediaDevices?.removeEventListener('devicechange', load);
+  }, []);
+  return (
+    <label className="field"><span>Microphone<i>{micId && !mics.some((m) => m.deviceId === micId) ? 'The chosen microphone is not connected; the default is used.' : 'Used for every recording.'}</i></span>
+      <select value={micId} onChange={(e) => void saveSettings({ micId: e.target.value })}>
+        <option value="">System default</option>
+        {mics.map((m, i) => <option key={m.deviceId} value={m.deviceId}>{m.label || `Microphone ${i + 1}`}</option>)}
+      </select>
+    </label>
   );
 }
 
