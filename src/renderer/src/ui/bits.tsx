@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { Source, Speaker } from '../../../shared/types';
 import { fmtTime, parseTime } from '../../../shared/text';
+import { get, go } from '../store';
 
 export const SPEAKER_HUES = ['#8f7dff', '#ff7fb2', '#4fd6bd', '#ffb454', '#62adff', '#d08bff', '#9be36a', '#ff8d69'];
 export const colorOf = (sp?: Speaker): string => SPEAKER_HUES[(sp?.color ?? 0) % SPEAKER_HUES.length];
@@ -57,7 +58,7 @@ export function Popover({ trigger, children, align = 'left', className = '' }: {
   );
 }
 
-const INLINE = /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|`[^`\n]+`|\[\d{1,2}(?::\d{2}){1,2}\]|\[\d{1,2}\])/g;
+const INLINE = /(\*\*[^*\n]+\*\*|\*[^*\s][^*\n]*\*|`[^`\n]+`|\[\d{1,2}(?::\d{2}){1,2}\]|\[\d{1,2}\]|\[[^[\]\n]{1,140}?, \d{1,2}(?::\d{2}){1,2}\])/g;
 
 /** Minimal markdown for model output, with clickable [m:ss] timestamps and [n] source citations. */
 export function Md({ text, onTime, sources, onSource }: { text: string; onTime?: (t: number) => void; sources?: Source[]; onSource?: (s: Source) => void }) {
@@ -71,6 +72,14 @@ export function Md({ text, onTime, sources, onSource }: { text: string; onTime?:
       if (cite) {
         const t = parseTime(cite[1]);
         if (t !== null && onTime) return <button key={k} className="cite time" onClick={() => onTime(t)}>{cite[1]}</button>;
+        // [Lecture title, m:ss]: open that lecture at that moment, when the title is one of the user's lectures.
+        const named = cite[1].match(/^(.+), (\d{1,2}(?::\d{2}){1,2})$/);
+        if (named) {
+          const title = named[1].trim().toLowerCase();
+          const m = get().meetings.find((x) => x.title.trim().toLowerCase() === title);
+          const at = parseTime(named[2]);
+          if (m && at !== null) return <button key={k} className="cite time" title={`Open “${m.title}” at ${named[2]}`} onClick={() => go({ name: 'meeting', id: m.id, t: at })}>{named[1]} · {named[2]}</button>;
+        }
         const src = sources?.find((x) => String(x.n) === cite[1]);
         if (src && onSource) return <button key={k} className="cite" title={`${src.title} · ${fmtTime(src.t)}`} onClick={() => onSource(src)}>{src.n}</button>;
       }

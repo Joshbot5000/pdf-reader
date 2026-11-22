@@ -34,6 +34,7 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
          from lecture material only; topics no lecture covers are refused without an AI call; saved until rewritten
    - [x] Ask Hark across all lectures also reads the revision record and case bank when asked about progress or
          cases ("which topics have I not revised recently?", "what cases have I studied on X?") (live runs)
+   - [x] Citations like [lecture title, 1:51] in outlines, tutor and Ask answers open that lecture at that moment (live)
    - [x] Research tutor mode quotes official statute text from legislation.gov.uk with its link (live run, s 2(2))
    - [x] Case bank across lectures
 4. Revision pack
@@ -72,8 +73,9 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 - tests/recover.mjs (crash recovery), tests/email.mjs, tests/groq.mjs, tests/phone.mjs still pass.
 
 ## Known limits / next tasks
-- Exact next task: citations in outlines and Ask answers that name a lecture and time ([lecture, m:ss]) should be
-  clickable and open that moment (today only plain [m:ss] in a lecture's own notes is clickable).
+- Exact next task: the phone app shows a lecture's Study material (law notes, exam focus, cases and verified
+  statutes) when linked to the Mac, read-only, reusing the Mac's study.json through the phone API.
+- Outstanding bugs: none known. Watch: AI-picked statute sections can differ between runs (e.g. "2" vs "2(1)").
 - Scanned PDFs (images only) are refused with a clear message: there is no OCR.
 - Groq free plan is ~8,000 tokens/minute per model: long lectures are analysed in parts with waits (minutes, not seconds).
 - "Research" tutor mode fetches statute text but has no general web search; other outside material is labelled "check this".
