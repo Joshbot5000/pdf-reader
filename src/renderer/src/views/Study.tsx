@@ -88,7 +88,8 @@ function NotesPane({ m, pack, setPack, seek }: { m: Meeting; pack: StudyPack; se
         <button className="btn small primary" disabled={job.busy} onClick={() => void go(style)}>{notes ? <><RotateCw size={13} /> {notes.style === style ? 'Rewrite' : 'Write'}</> : <><Sparkles size={13} /> Write notes</>}</button>
         <span className="grow" />
         {notes && <button className="btn ghost small" onClick={() => void navigator.clipboard.writeText(notes.text).then(() => toast('Notes copied.', 'ok'))}><Copy size={13} /> Copy</button>}
-        {notes && <button className="btn ghost small" onClick={() => void run(api.exportStudy(m.id, 'notes'))}><Download size={13} /> Export</button>}
+        {notes && <button className="btn ghost small" title="Markdown" onClick={() => void run(api.exportStudy(m.id, 'notes'))}><Download size={13} /> .md</button>}
+        {notes && <button className="btn ghost small" title="Word document" onClick={() => void run(api.exportStudy(m.id, 'notes-docx'))}><Download size={13} /> Word</button>}
       </div>
       {job.busy && <Progress stream={job.stream} label="Writing the notes" stop={job.stop} />}
       {job.busy && job.stream?.text ? <div className="study-notes"><Md text={job.stream.text} onTime={(t) => seek(t, true)} /></div>

@@ -257,7 +257,8 @@ export class Intelligence {
       }
     }
     const focus = passage ? `\n\nThe student is asking about this passage, said at [${fmtTime(passage.t)}]:\n"${passage.text.slice(0, 1500)}"` : '';
-    const system = `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}\nGround your answer in the lecture material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${others}${focus}`;
+    const lecture = m.template === 'lecture';
+    const system = `${lecture ? `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}` : `You are Hark, an assistant answering questions about the recorded conversation "${m.title}".${mode === 'lecture' ? ' Answer only from the material below.' : ''}`}\nGround your answer in the material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${others}${focus}`;
     try {
       const text = await this.llm.generate({ streamId, system, history, prompt: question, maxTokens: mode === 'exam' || mode === 'compare' ? 1000 : 750, temperature: mode === 'socratic' || mode === 'explain' ? 0.5 : 0.3, tier: 'strong' });
       const reply: ChatMsg = { id: uid(), role: 'assistant', text, at: Date.now() };

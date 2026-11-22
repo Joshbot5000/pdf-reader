@@ -149,7 +149,7 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
   const busy = m.status === 'processing';
   const canPlay = m.hasAudio && m.status === 'ready';
   const saveTitle = () => title.trim() && title !== m.title && void run(api.updateMeeting(id, { title: title.trim() }));
-  const exportAs = (f: 'md' | 'txt' | 'srt' | 'pdf' | 'audio') => void run(api.exportMeeting(id, f)).then((p) => p && toast('Saved', 'ok'));
+  const exportAs = (f: 'md' | 'txt' | 'srt' | 'pdf' | 'docx' | 'audio') => void run(api.exportMeeting(id, f)).then((p) => p && toast('Saved', 'ok'));
   const copy = (text: string, what: string) => void api.copyText(text).then(() => toast(`${what} copied`, 'ok'));
   const nextRate = () => {
     const r = [1, 1.25, 1.5, 2, 0.75][([1, 1.25, 1.5, 2, 0.75].indexOf(rate) + 1) % 5];
@@ -187,6 +187,7 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
               <div className="menu" onClick={close}>
                 <button onClick={() => exportAs('md')}><FileText size={14} /> Notes + transcript (Markdown)</button>
                 <button onClick={() => exportAs('pdf')}><FileText size={14} /> PDF</button>
+                <button onClick={() => exportAs('docx')}><FileText size={14} /> Word (.docx)</button>
                 <button onClick={() => exportAs('txt')}><FileText size={14} /> Plain text</button>
                 <button onClick={() => exportAs('srt')}><Captions size={14} /> Subtitles (.srt)</button>
                 {m.hasAudio && <button onClick={() => exportAs('audio')}><FileAudio size={14} /> Audio</button>}

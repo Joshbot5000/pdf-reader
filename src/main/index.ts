@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, Tray, clipboard, globalShortcut, nativeImage, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, session, shell, systemPreferences, utilityProcess } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, screen, clipboard, globalShortcut, nativeImage, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, session, shell, systemPreferences, utilityProcess } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,6 +16,7 @@ import { lanAddresses, servePhone, type PhoneNotes, type PhoneServer, type Uploa
 import { PeakMeter } from '../shared/vad';
 import { CloudError, abortCloud, cloudGenerate, cloudModels } from './cloud';
 import { Study } from './study';
+import { markdownToDocx } from './docx';
 import { ankiExport, pickSession, record, topicStatus, type Practice } from '../shared/law';
 import type { RevisionItem } from '../shared/api';
 import { roughTokens } from '../shared/text';
@@ -33,10 +34,12 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'hark-media', privileges: { stan
 
 let win: BrowserWindow | null = null;
 let phone: PhoneServer | null = null;
+let mini: BrowserWindow | null = null;
 let phoneError = '';
 const PHONE_EVENTS = new Set<string>(['meeting', 'meetingDeleted', 'live', 'stream', 'status']);
 const send = <K extends keyof Events>(event: K, data: Events[K]): void => {
   if (win && !win.isDestroyed()) win.webContents.send(`hark:${event}`, data);
+  if (mini && !mini.isDestroyed() && (event === 'live' || event === 'meeting')) mini.webContents.send(`hark:${event}`, data);
   if (phone && PHONE_EVENTS.has(event)) phone.broadcast(event, data);
 };
 
@@ -516,6 +519,7 @@ function updateTray(): void {
     Menu.buildFromTemplate([
       on ? { label: 'Stop recording', click: () => send('command', 'stop-record') } : { label: 'Start recording', accelerator: lib.settings().recordShortcut || undefined, click: () => (showWindow(), send('command', 'record')) },
       { label: 'Open Hark', click: showWindow },
+      { label: mini && !mini.isDestroyed() ? 'Hide live transcript' : 'Show live transcript', click: () => (toggleMini(), updateTray()) },
       { type: 'separator' },
       { label: 'Quit Hark', role: 'quit' },
     ]),
@@ -527,6 +531,30 @@ function updateTray(): void {
 function showWindow(): void {
   if (!win) createWindow();
   else (win.isMinimized() && win.restore(), win.show(), win.focus());
+}
+
+/** The floating live-transcript window, on top of every app and every Space. */
+function toggleMini(show = !(mini && !mini.isDestroyed())): boolean {
+  if (!show) {
+    mini?.close();
+    mini = null;
+    return false;
+  }
+  if (mini && !mini.isDestroyed()) return mini.show(), true;
+  mini = new BrowserWindow({
+    width: 380, height: 230, minWidth: 260, minHeight: 120, alwaysOnTop: true, frame: false, resizable: true, skipTaskbar: true, fullscreenable: false,
+    backgroundColor: '#101219', title: 'Hark live transcript', show: false,
+    webPreferences: { preload: path.join(__dirname, '../preload/index.cjs'), sandbox: true, contextIsolation: true },
+  });
+  mini.setAlwaysOnTop(true, 'floating');
+  mini.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  const wa = (win && !win.isDestroyed() ? screen.getDisplayMatching(win.getBounds()) : screen.getPrimaryDisplay()).workArea;
+  mini.setPosition(wa.x + wa.width - 400, wa.y + 40);
+  mini.once('ready-to-show', () => mini?.showInactive());
+  mini.on('closed', () => (mini = null));
+  if (process.env.ELECTRON_RENDERER_URL) void mini.loadURL(`${process.env.ELECTRON_RENDERER_URL}#mini`);
+  else void mini.loadFile(path.join(__dirname, '../renderer/index.html'), { hash: 'mini' });
+  return true;
 }
 
 function makeTray(): void {
@@ -898,6 +926,7 @@ const api: Api = {
           w.destroy();
         }
       });
+    if (format === 'docx') return saveWithDialog(m.title, 'docx', async (f) => fs.writeFileSync(f, await markdownToDocx(toMarkdown(m, paras), m.title)));
     const text = format === 'md' ? toMarkdown(m, paras) : format === 'srt' ? toSrt(paras, m.speakers) : toText(m, paras);
     return saveWithDialog(m.title, format, (f) => fs.writeFileSync(f, text));
   },
@@ -1044,7 +1073,17 @@ const api: Api = {
       return saveWithDialog(`${m.title} flashcards`, 'txt', (f) => fs.writeFileSync(f, ankiExport(pack.cards!, `Hark::${m.title}`)));
     }
     if (!pack.notes) throw new Error('Write the notes first.');
+    if (what === 'notes-docx') return saveWithDialog(`${m.title} notes`, 'docx', async (f) => fs.writeFileSync(f, await markdownToDocx(pack.notes!.text, m.title)));
     return saveWithDialog(`${m.title} notes`, 'md', (f) => fs.writeFileSync(f, pack.notes!.text));
+  },
+  toggleMini: async (show) => {
+    const on = toggleMini(show);
+    updateTray();
+    return on;
+  },
+  miniCommand: async (cmd) => {
+    if (cmd === 'show') return showWindow();
+    send('command', cmd);
   },
   phoneInfo: async () => {
     const s = lib.settings();

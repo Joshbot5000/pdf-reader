@@ -314,3 +314,12 @@ describe('case names as speech-to-text actually writes them', () => {
     expect(locateName(paras, 'Hyde v Wrench').t).toBe(-1);
   });
 });
+
+import { markdownToDocx } from '../src/main/docx';
+describe('Word export', () => {
+  it('turns notes into a real .docx', async () => {
+    const buf = await markdownToDocx('# Offer and acceptance\n\n## Cases\n- **Fisher v Bell** — display is an invitation to treat [0:47]\n1. Offer\n2. Acceptance\n\n| Case | Rule |\n|---|---|\n| Hyde v Wrench | Counter-offer rejects |\n\n> Remember this', 'Test');
+    expect(buf.subarray(0, 2).toString()).toBe('PK');
+    expect(buf.length).toBeGreaterThan(5000);
+  });
+});

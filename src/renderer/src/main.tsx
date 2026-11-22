@@ -4,5 +4,7 @@ import '@fontsource-variable/fraunces/full.css';
 import '@fontsource-variable/jetbrains-mono';
 import './styles.css';
 import { App } from './App';
+import { Mini } from './Mini';
 
-createRoot(document.getElementById('root')!).render(<App />);
+// The same page serves the floating live-transcript window.
+createRoot(document.getElementById('root')!).render(location.hash === '#mini' ? <Mini /> : <App />);

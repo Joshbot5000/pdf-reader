@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AudioLines, GraduationCap, Scale, Check, CircleAlert, FolderPlus, Folder, Home as HomeIcon, ListChecks, Mic, Moon, Search, Settings as Cog, Sparkles, Star, Sun, Upload, X } from 'lucide-react';
 import { api } from './api';
 import { boot, get, go, run, saveSettings, set, toast, useStore, type View } from './store';
-import { startRecording, stopRecording } from './recorder';
+import { bookmark, startRecording, stopRecording } from './recorder';
 import { fmtTime } from '../../shared/text';
 import type { SearchHit, TemplateId } from '../../shared/types';
 import { Home } from './views/Home';
@@ -54,6 +54,7 @@ export function App() {
       if (!get().settings.onboarded) return;
       if (c === 'record') void startRecording(currentTemplate());
       if (c === 'stop-record') void stopRecording();
+      if (c === 'bookmark') bookmark();
       if (c === 'import') void importFiles();
       if (c === 'palette') set({ palette: true });
       if (c === 'ask') go({ name: 'ask' });

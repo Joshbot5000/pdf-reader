@@ -34,7 +34,7 @@ export type Api = {
   abort(streamId: string): Promise<void>;
   search(q: string): Promise<SearchHit[]>;
 
-  exportMeeting(id: string, format: 'md' | 'txt' | 'srt' | 'pdf' | 'audio'): Promise<string | null>;
+  exportMeeting(id: string, format: 'md' | 'txt' | 'srt' | 'pdf' | 'docx' | 'audio'): Promise<string | null>;
   copyText(text: string): Promise<void>;
 
   saveSettings(patch: Partial<Settings>): Promise<Settings>;
@@ -47,6 +47,10 @@ export type Api = {
   openDataFolder(): Promise<void>;
   micAccess(): Promise<boolean>;
   phoneInfo(): Promise<PhoneInfo>;
+  /** Show or hide the floating live-transcript window. */
+  toggleMini(show?: boolean): Promise<boolean>;
+  /** A button in the floating window: passed on to the main window. */
+  miniCommand(cmd: 'stop-record' | 'bookmark' | 'show'): Promise<void>;
   /** Study material for one lecture. */
   studyGet(id: string): Promise<StudyPack>;
   studyNotes(id: string, style: NoteStyle, streamId: string): Promise<StudyPack>;
@@ -58,7 +62,7 @@ export type Api = {
   practice(key: string, right: boolean, topic: string, lectureId: string): Promise<void>;
   revisionOverview(): Promise<RevisionOverview>;
   caseBank(): Promise<{ c: CaseRef; meetingId: string; title: string; date: number }[]>;
-  exportStudy(id: string, what: 'notes' | 'anki' | 'all-anki'): Promise<string | null>;
+  exportStudy(id: string, what: 'notes' | 'notes-docx' | 'anki' | 'all-anki'): Promise<string | null>;
   /** Email one conversation's notes now. */
   emailNotes(id: string): Promise<Meeting>;
   /** Save (and check) the Gmail app password; an empty one removes it. */

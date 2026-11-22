@@ -38,7 +38,8 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
    - [x] Topic dashboard (strong / improving / needs revision / not tested) and weakest-first sessions
 7. Polish
    - [x] Bookmark categories (Important, Confusing, Exam focus, Follow up), text size, resizable side panel, Anki export
-   - [ ] Tags/subjects beyond folders, DOCX export, floating mini transcript window, PDF/slide import
+   - [x] DOCX export (notes and whole lectures), floating live-transcript window (tests/mini.mjs)
+   - [ ] Tags/subjects beyond folders, PDF/slide import as lecture materials
 
 ## How it was tested (22 Nov)
 - Unit tests (tests/unit.test.ts): emphasis cues, case-name and statute detection on speech-to-text spellings,
@@ -49,8 +50,7 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 - tests/recover.mjs (crash recovery), tests/email.mjs, tests/groq.mjs, tests/phone.mjs still pass.
 
 ## Known limits / next tasks
-- Exact next task: DOCX export of study notes (via the `docx` package), then a floating mini-transcript window
-  during recording, then PDF/slide import as lecture materials for the tutor's lecture-only mode.
+- Exact next task: PDF/slide import as lecture materials (used by notes and the tutor's lecture-only mode).
 - Groq free plan is ~8,000 tokens/minute per model: long lectures are analysed in parts with waits (minutes, not seconds).
 - "Research" tutor mode has no web search; it uses general knowledge, clearly labelled, and points to where to verify.
 - Legislation links go to a legislation.gov.uk search for the Act; the section text itself is not fetched or verified.

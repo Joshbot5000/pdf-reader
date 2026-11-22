@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Bookmark, Pause, Play, Sparkles, Square, Trash2, X } from 'lucide-react';
+import { Bookmark, Pause, PictureInPicture2, Play, Sparkles, Square, Trash2, X } from 'lucide-react';
 import { api } from '../api';
 import { clearStream, go, startStream, useStore } from '../store';
 import { bookmark, discardRecording, levels, stopRecording, togglePause } from '../recorder';
@@ -58,6 +58,7 @@ export function Recorder() {
         </div>
         <div className="rec-extra">
           <button className="btn ghost small" disabled={llm === 'missing' || !paras.length || catchStream?.running} onClick={catchUp} title={llm === 'missing' ? 'Needs an AI model (Settings)' : 'Summarise the last few minutes'}><Sparkles size={14} /> Catch me up</button>
+          <button className="btn ghost small" onClick={() => void api.toggleMini()} title="A small window that stays on top of other apps"><PictureInPicture2 size={14} /> Floating transcript</button>
           <button className="btn ghost small danger" onClick={() => confirm('Discard this recording? Nothing will be saved.') && void discardRecording()}><Trash2 size={14} /> Discard</button>
         </div>
         {catchStream && (
