@@ -3,7 +3,10 @@
  * captured, so nothing is lost if the app is closed or the Mac is out of reach. Finished recordings
  * wait in an outbox and are sent to Hark on the Mac as soon as it can be reached.
  */
-import { get, openMeeting, set, toast, token, whenOnline, withKey, type OutItem } from './link';
+import { useEffect, useState } from 'react';
+import { call, get, loadTranscript, openMeeting, set, toast, token, whenOffline, whenOnline, withKey, type LocalNotes, type OutItem } from './link';
+import { chat as groqChat, groqKey, summarize as groqSummarize, transcribe as groqTranscribe } from './groq';
+import type { ChatMsg, Meeting, Summary } from '../../shared/types';
 import type { TemplateId } from '../../shared/types';
 
 export const canRecord = typeof MediaRecorder !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && window.isSecureContext;
@@ -65,6 +68,114 @@ export async function restoreOutbox(): Promise<void> {
     /* storage blocked: recording will warn when started */
   }
   whenOnline(() => void flush());
+  // Mac out of reach: do the work here instead (if a Groq key is set).
+  whenOffline(() => void processPending());
+  // Anything interrupted mid-way (the app was closed) picks up where it left off.
+  for (const o of get().outbox) if (o.local?.state === 'working') void processLocal(o.rid, true);
+  setTimeout(() => !get().online && void processPending(), 4000);
+}
+
+// ---------------------------------------------------------------- working without the Mac
+
+const working = new Set<string>();
+const setLocal = async (rid: string, p: Partial<LocalNotes>): Promise<OutItem | undefined> => {
+  const cur = get().outbox.find((o) => o.rid === rid);
+  if (!cur?.local) return undefined;
+  const next = patch(rid, { local: { ...cur.local, ...p } });
+  if (next) await putRec(next).catch(() => undefined);
+  return next;
+};
+
+/** Transcribe and write notes for everything waiting, through Groq, because the Mac can't be reached. */
+export async function processPending(): Promise<void> {
+  if (!groqKey()) return;
+  for (const o of [...get().outbox].reverse()) if (o.state === 'waiting' && !o.local) await processLocal(o.rid);
+}
+
+/** One recording, done entirely on the phone with Groq. */
+export async function processLocal(rid: string, resume = false): Promise<void> {
+  const item = get().outbox.find((o) => o.rid === rid);
+  if (!item || working.has(rid) || !groqKey() || (item.local && !resume && item.local.state !== 'error')) return;
+  working.add(rid);
+  try {
+    const keep = item.local;
+    const title = keep?.title ?? (item.name?.replace(/\.[^.]+$/, '') || `Recording, ${new Date(item.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`);
+    const start: OutItem = { ...item, local: { state: 'working', stage: 'Transcribing', title, titleAuto: keep?.titleAuto ?? !item.name, duration: item.duration, paras: keep?.paras ?? [], chat: keep?.chat ?? [], starred: keep?.starred } };
+    patch(rid, { local: start.local });
+    await putRec(start);
+    let local = start.local!;
+    if (!local.paras.length) {
+      const audio = new Blob(await chunksOf(rid), { type: item.mime });
+      const out = await groqTranscribe(audio, item.ext, get().language, (stage) => void setLocal(rid, { stage }));
+      // Moments flagged while recording are highlighted, as on the Mac.
+      for (const t of item.bookmarks) {
+        const p = out.paras.find((x) => t >= x.s - 0.5 && t <= x.e + 2) ?? [...out.paras].reverse().find((x) => x.s <= t);
+        if (p) p.hl = true;
+      }
+      local = (await setLocal(rid, { paras: out.paras, duration: out.duration || item.duration, stage: 'Writing the notes' }))?.local ?? local;
+    }
+    if (!local.paras.length) return void (await setLocal(rid, { state: 'ready', stage: undefined, error: undefined }));
+    const summary = await groqSummarize(local.paras, item.template, (stage) => void setLocal(rid, { stage }));
+    await setLocal(rid, { state: 'ready', stage: undefined, error: undefined, summary, title: local.titleAuto && summary.title ? summary.title : local.title });
+  } catch (err) {
+    await setLocal(rid, { state: 'error', stage: undefined, error: (err as Error).message });
+  } finally {
+    working.delete(rid);
+    if (get().online) void flush();
+  }
+}
+
+/** The same actions the Mac offers on a conversation, for ones that live on the phone. */
+async function localOp(method: string, rid: string, args: unknown[]): Promise<unknown> {
+  const o = get().outbox.find((x) => x.rid === rid);
+  if (!o?.local) throw new Error('That conversation is no longer on this phone (it has gone to your Mac).');
+  const l = o.local;
+  switch (method) {
+    case 'updateMeeting': {
+      const p = args[0] as Partial<Meeting>;
+      await setLocal(rid, { ...(p.title !== undefined ? { title: p.title, titleAuto: false } : {}), ...(p.starred !== undefined ? { starred: p.starred } : {}) });
+      return null;
+    }
+    case 'setSummary':
+      return setLocal(rid, { summary: args[0] as Summary });
+    case 'deleteMeeting':
+      return discard(rid);
+    case 'summarize':
+      await setLocal(rid, { summary: undefined, state: 'working' });
+      return processLocal(rid, true);
+    case 'chat': {
+      const q = String(args[0]);
+      const answer = await groqChat(l.paras, l.chat, q);
+      const at = Date.now();
+      const msgs: ChatMsg[] = [...l.chat, { id: `u${at}`, role: 'user', text: q, at }, { id: `a${at}`, role: 'assistant', text: answer, at }];
+      await setLocal(rid, { chat: msgs });
+      return msgs[msgs.length - 1];
+    }
+    case 'clearChat':
+      return setLocal(rid, { chat: [] });
+    case 'emailNotes':
+      throw new Error(get().macEmails ? 'This one will be emailed as soon as your Mac receives it.' : 'Emails are sent by your Mac: switch them on in Hark on the Mac (Settings → Email).');
+    default:
+      throw new Error("That needs your Mac, which can't be reached right now.");
+  }
+}
+
+/** Do something to a conversation, wherever it lives. */
+export const meetingCall = <T = unknown,>(method: string, id: string, ...args: unknown[]): Promise<T> =>
+  (id.startsWith('local:') ? localOp(method, id.slice(6), args) : call(method, id, ...args)) as Promise<T>;
+
+/** Where to play a conversation's audio from: the Mac, or (for ones made here) the phone itself. */
+export function useAudioSrc(id: string, macUrl: string): string {
+  const [src, setSrc] = useState(id.startsWith('local:') ? '' : macUrl);
+  useEffect(() => {
+    if (!id.startsWith('local:')) return void setSrc(macUrl);
+    const o = get().outbox.find((x) => `local:${x.rid}` === id);
+    if (!o) return;
+    let url = '';
+    void chunksOf(o.rid).then((c) => setSrc((url = URL.createObjectURL(new Blob(c, { type: o.mime })))));
+    return () => URL.revokeObjectURL(url);
+  }, [id, macUrl]);
+  return src;
 }
 
 // ---------------------------------------------------------------- sending
@@ -75,7 +186,8 @@ export async function flush(): Promise<void> {
   flushing = true;
   try {
     for (;;) {
-      const next = get().outbox.filter((o) => o.state === 'waiting' && !o.error).pop();
+      // Notes still being written on the phone are finished first, then go to the Mac with the audio.
+      const next = get().outbox.filter((o) => o.state === 'waiting' && !o.error && o.local?.state !== 'working' && !working.has(o.rid)).pop();
       if (!next || !get().online) break;
       if (!(await send(next))) break;
     }
@@ -95,12 +207,20 @@ export async function discard(rid: string): Promise<void> {
 }
 
 async function send(item: OutItem): Promise<boolean> {
+  item = get().outbox.find((o) => o.rid === item.rid) ?? item;
   patch(item.rid, { state: 'sending', sent: 0, error: undefined });
   try {
     const body = new Blob(await chunksOf(item.rid), { type: item.mime });
     if (!body.size) throw new Error('This recording is empty.');
     const q = new URLSearchParams({ rid: item.rid, t: String(item.createdAt), tpl: item.template, ext: item.ext, marks: item.bookmarks.join(',') });
     if (item.name) q.set('name', item.name);
+    if (item.local?.state === 'ready') {
+      // Hand over what the phone already worked out, so the Mac keeps exactly these notes.
+      const l = item.local;
+      const res = await fetch(withKey(`./attach?rid=${encodeURIComponent(item.rid)}`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: l.title, titleAuto: l.titleAuto, duration: l.duration, paras: l.paras, summary: l.summary, chat: l.chat, starred: l.starred }) }).catch(() => null);
+      if (!res) throw new Error('offline');
+      if (!res.ok) throw new Error(`Hark on your Mac refused the notes (${res.status}).`);
+    }
     const meetingId = await new Promise<string>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', withKey(`./upload?${q}`));
@@ -120,14 +240,17 @@ async function send(item: OutItem): Promise<boolean> {
       xhr.ontimeout = () => reject(new Error('offline'));
       xhr.send(body);
     });
+    // Straight into the conversation it became, if the user is still on the home screen (or was reading it here).
+    // The view moves to the Mac's copy first, so it never points at something that has gone.
+    if (get().open === `local:${item.rid}`) (set({ open: meetingId }), void loadTranscript(meetingId, true));
     await discard(item.rid);
-    // Straight into the conversation it became, if the user is still on the home screen.
-    if (!get().open && !get().recorder) openMeeting(meetingId);
+    if (!get().open && !get().recorder && !item.local) openMeeting(meetingId);
     return true;
   } catch (err) {
     const msg = (err as Error).message;
     // A dropped connection is not an error worth showing: it simply waits for the Mac.
     patch(item.rid, { state: 'waiting', sent: undefined, error: msg === 'offline' ? undefined : msg });
+    if (msg === 'offline') void processPending();
     return msg !== 'offline';
   }
 }
@@ -206,7 +329,7 @@ export async function startRecording(template: TemplateId): Promise<boolean> {
     return false;
   }
   const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm', 'audio/ogg;codecs=opus'].find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
-  media = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 64000 } : undefined);
+  media = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined);
   const real = media.mimeType || mime || 'audio/mp4';
   current = { rid: newId(), createdAt: Date.now(), duration: 0, template, bookmarks: [], mime: real, ext: /mp4|aac|m4a/.test(real) ? 'm4a' : /ogg/.test(real) ? 'ogg' : 'webm', bytes: 0, state: 'recording' };
   seqNo = 0;
@@ -300,8 +423,9 @@ export async function stopRecording(keep = true): Promise<void> {
   const finished: OutItem = { ...item, duration: total, bookmarks: marks, state: 'waiting' };
   await putRec(finished).catch(() => undefined);
   set((s) => ({ outbox: [finished, ...s.outbox] }));
-  if (!get().online) toast('Saved on your phone. It will be sent when your Mac is in reach.');
-  void flush();
+  if (get().online) void flush();
+  else if (groqKey()) (toast('Your Mac is out of reach, so this phone is writing the notes. They go to your Mac later.'), void processLocal(finished.rid));
+  else toast('Saved on your phone. It will be sent when your Mac is in reach.');
 }
 
 /** Hand an existing audio or video file (a voice memo, say) to Hark. */
@@ -317,5 +441,6 @@ export async function addFile(file: File, template: TemplateId): Promise<void> {
     return;
   }
   set((s) => ({ outbox: [item, ...s.outbox] }));
-  void flush();
+  if (get().online) void flush();
+  else void processLocal(item.rid);
 }

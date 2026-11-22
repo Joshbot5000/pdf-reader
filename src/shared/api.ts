@@ -51,6 +51,9 @@ export type Api = {
   /** Save (and check) the Gmail app password; an empty one removes it. */
   saveEmailPassword(pass: string): Promise<{ saved: boolean }>;
   emailStatus(): Promise<{ hasPassword: boolean }>;
+  /** The Groq key handed to paired phones, for when this Mac is out of reach. Empty removes it. */
+  saveGroqKey(key: string): Promise<void>;
+  groqStatus(): Promise<{ hasKey: boolean }>;
   /** Send a test email with the current settings. */
   testEmail(): Promise<void>;
 };

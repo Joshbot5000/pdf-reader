@@ -4,8 +4,9 @@ import { Avatar, Md, Orb, Spinner, clock, dayLabel, relDay } from '../../rendere
 import { fmtDuration, fmtTime } from '../../shared/text';
 import { TEMPLATES } from '../../shared/summaryFormat';
 import type { ActionItem, ChatMsg, Meeting, SearchHit, Source, TemplateId } from '../../shared/types';
-import { call, clearStream, get, haptic, openMeeting, run, set, startStream, toast, token, useLink, type OutItem, type Tab } from './link';
-import { addFile, bookmark, canRecord, discard, levels, recState, retry, setTemplate, startRecording, stopRecording, subscribeRec, togglePause } from './rec';
+import { call, clearStream, get, haptic, localMeeting, openMeeting, run, set, startStream, toast, token, type OutItem, type Tab, useLink } from './link';
+import { addFile, bookmark, canRecord, discard, levels, meetingCall, processLocal, processPending, recState, retry, setTemplate, startRecording, stopRecording, subscribeRec, togglePause } from './rec';
+import { checkKey, groqKey } from './groq';
 import { MeetingScreen } from './Meeting';
 
 const standalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
@@ -14,7 +15,7 @@ const useRec = () => useSyncExternalStore(subscribeRec, recState);
 export const toggleAction = (m: Meeting, a: ActionItem): void => {
   if (!m.summary) return;
   haptic();
-  void run(call('setSummary', m.id, { ...m.summary, actions: m.summary.actions.map((x) => (x.id === a.id ? { ...x, done: !x.done } : x)) }));
+  void run(meetingCall('setSummary', m.id, { ...m.summary, actions: m.summary.actions.map((x) => (x.id === a.id ? { ...x, done: !x.done } : x)) }));
 };
 
 export function App() {
@@ -128,8 +129,11 @@ function StatusPill() {
 }
 
 function Home() {
-  const meetings = useLink((s) => s.meetings);
-  const outbox = useLink((s) => s.outbox);
+  const macMeetings = useLink((s) => s.meetings);
+  const all = useLink((s) => s.outbox);
+  // Conversations made on this phone sit alongside the Mac's; recordings not yet worked on wait above them.
+  const meetings = useMemo(() => [...all.filter((o) => o.local).map(localMeeting), ...macMeetings].sort((a, b) => b.createdAt - a.createdAt), [all, macMeetings]);
+  const outbox = useMemo(() => all.filter((o) => !o.local), [all]);
   const name = useLink((s) => s.userName);
   const online = useLink((s) => s.online);
   const booted = useLink((s) => s.booted);
@@ -208,6 +212,7 @@ function OutCard({ o }: { o: OutItem }) {
         <span>{(o.bytes / 1e6).toFixed(1)} MB</span>
         <span>{o.error ? 'Could not be sent' : o.state === 'sending' ? `Sending to your Mac… ${Math.round((o.sent ?? 0) * 100)}%` : online ? 'Queued' : 'Waiting for your Mac'}</span>
       </p>
+      {!online && !o.error && o.state === 'waiting' && (groqKey() ? <p className="working"><button className="link" onClick={() => void processLocal(o.rid)}>Write the notes on this phone now</button></p> : <p className="dim small-note">Add a Groq key (tap the status at the top) and this phone will write the notes itself when your Mac is out of reach.</p>)}
       {o.state === 'sending' && <div className="bar"><span style={{ width: `${(o.sent ?? 0) * 100}%` }} /></div>}
       {o.error && <p className="err">{o.error} <button className="link" onClick={() => retry(o.rid)}>Try again</button></p>}
     </div>
@@ -228,11 +233,11 @@ function MeetingCard({ m }: { m: Meeting }) {
       <p className="meta">
         <span>{relDay(m.createdAt)}, {clock(m.createdAt)}</span>
         {m.duration > 0 && <span>{fmtDuration(m.duration)}</span>}
-        {m.source === 'phone' && <span>phone</span>}
+        {m.id.startsWith('local:') ? <span className="on-phone">on this phone</span> : m.source === 'phone' && <span>phone</span>}
       </p>
       {working ? (
         <>
-          <p className="working"><Spinner size={12} /> {m.status === 'recording' ? 'Recording on your Mac' : `Transcribing on your Mac${progress ? ` · ${Math.round(progress * 100)}%` : ''}`}</p>
+          <p className="working"><Spinner size={12} /> {m.id.startsWith('local:') ? 'Working on this phone' : m.status === 'recording' ? 'Recording on your Mac' : `Transcribing on your Mac${progress ? ` · ${Math.round(progress * 100)}%` : ''}`}</p>
           <div className="bar"><span style={{ width: `${(progress ?? 0.02) * 100}%` }} /></div>
         </>
       ) : m.status === 'error' ? (
@@ -254,7 +259,9 @@ function MeetingCard({ m }: { m: Meeting }) {
 // ---------------------------------------------------------------- tasks
 
 function Tasks() {
-  const meetings = useLink((s) => s.meetings);
+  const macMeetings = useLink((s) => s.meetings);
+  const all = useLink((s) => s.outbox);
+  const meetings = useMemo(() => [...all.filter((o) => o.local).map(localMeeting), ...macMeetings], [all, macMeetings]);
   const [filter, setFilter] = useState<'open' | 'done'>('open');
   const groups = meetings.filter((m) => m.summary?.actions.length).map((m) => ({ m, items: m.summary!.actions.filter((a) => (filter === 'done') === a.done) })).filter((g) => g.items.length);
   const total = meetings.reduce((n, m) => n + (m.summary?.actions.length ?? 0), 0);
@@ -289,9 +296,10 @@ export function TaskRow({ m, a }: { m: Meeting; a: ActionItem }) {
 
 // ---------------------------------------------------------------- ask
 
-export function Composer({ placeholder, busy, onSend, onStop }: { placeholder: string; busy: boolean; onSend: (q: string) => void; onStop: () => void }) {
+export function Composer({ placeholder, busy, onSend, onStop, offlineOk = false }: { placeholder: string; busy: boolean; onSend: (q: string) => void; onStop: () => void; offlineOk?: boolean }) {
   const [q, setQ] = useState('');
-  const online = useLink((s) => s.online);
+  // Conversations kept on this phone are answered here (through Groq), so they don't need the Mac.
+  const online = useLink((s) => s.online) || offlineOk;
   const send = () => {
     const text = q.trim();
     if (!text || busy || !online) return;
@@ -417,6 +425,34 @@ function Recorder() {
 
 // ---------------------------------------------------------------- connection sheet
 
+/** The phone's own Groq key: lets it transcribe and write notes when the Mac is out of reach. */
+function GroqSetup() {
+  const [has, setHas] = useState(!!groqKey());
+  const [key, setKey] = useState('');
+  const [msg, setMsg] = useState('');
+  const save = async () => {
+    setMsg('Checking with Groq…');
+    try {
+      await checkKey(key.trim());
+      setHas(true);
+      setKey('');
+      setMsg('Working. Recordings made while your Mac is out of reach are now written up here.');
+      void processPending();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+  return (
+    <div className="note">
+      <b>Work without your Mac {has && <span className="chip ok">On</span>}</b>
+      <p>{has ? 'When your Mac is out of reach, this phone transcribes and writes the notes itself using Groq (free), then hands everything to your Mac when it is back.' : 'With a free Groq key, this phone can transcribe and write the notes itself whenever your Mac is out of reach, then hand everything to your Mac later. Get a key at console.groq.com → API Keys, or add it once in Hark on your Mac (Settings → Phone) and it arrives here automatically.'}</p>
+      <div className="key-row"><input value={key} placeholder={has ? 'Key saved (paste a new one to replace it)' : 'gsk_…'} autoCapitalize="off" autoCorrect="off" spellCheck={false} onChange={(e) => setKey(e.target.value)} /><button className="btn small primary" disabled={!key.trim()} onClick={() => void save()}>Save</button></div>
+      {msg && <p className="small-note">{msg}</p>}
+      <p className="small-note dim">Recordings sent to Groq leave your devices for processing. Groq's free plan has daily limits that are generous for personal use.</p>
+    </div>
+  );
+}
+
 function LinkSheet() {
   const online = useLink((s) => s.online);
   const status = useLink((s) => s.status);
@@ -440,6 +476,7 @@ function LinkSheet() {
             <p>Phones only allow the microphone on a secure (https) address. On your Mac, open Hark → Settings → Phone and follow “Record from anywhere”. Until then, use <b>Add file</b> to send voice memos.</p>
           </div>
         )}
+        <GroqSetup />
         {!standalone && <div className="note"><b>Install Hark on this phone</b><p>In Safari tap <b>Share</b>, then <b>Add to Home Screen</b>. On Android, open the browser menu and tap <b>Install app</b>.</p></div>}
         <div className="sheet-actions">
           <button className="btn danger" onClick={() => { if (confirm('Unpair this phone? Recordings still waiting on the phone are kept.')) { localStorage.removeItem('hark.k'); localStorage.removeItem('hark.cache'); location.replace(location.pathname); } }}>Unpair</button>

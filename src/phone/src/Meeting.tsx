@@ -4,16 +4,21 @@ import { Avatar, Md, Spinner, clock, colorOf, relDay } from '../../renderer/src/
 import { fmtDuration, fmtTime, toMarkdown } from '../../shared/text';
 import { TEMPLATES } from '../../shared/summaryFormat';
 import type { ChatMsg, Meeting, Para, Speaker } from '../../shared/types';
-import { audioUrl, call, clearStream, closeMeeting, haptic, run, speakersOf, startStream, toast, useLink } from './link';
+import { audioUrl, clearStream, closeMeeting, findMeeting, haptic, run, speakersOf, startStream, toast, transcriptOf, useLink } from './link';
+import { meetingCall as call, processLocal, useAudioSrc } from './rec';
 import { Bubbles, Composer, TaskRow } from './App';
 
 type Pane = 'notes' | 'transcript' | 'chat';
+const NONE: Speaker[] = [];
 const RATES = [1, 1.25, 1.5, 2];
 
 export function MeetingScreen({ id }: { id: string }) {
-  const m = useLink((s) => s.meetings.find((x) => x.id === id));
-  const paras = useLink((s) => s.transcripts[id]);
-  const speakers = useLink((s) => (m ? speakersOf(m, s) : []));
+  const m = useLink((s) => findMeeting(s, id));
+  const paras = useLink((s) => transcriptOf(s, id));
+  const local = id.startsWith('local:');
+  const stage = useLink((s) => (local ? s.outbox.find((o) => `local:${o.rid}` === id)?.local?.stage : undefined));
+  const audioSrc = useAudioSrc(id, audioUrl(id));
+  const speakers = useLink((s) => (m ? speakersOf(m, s) : NONE));
   const progress = useLink((s) => s.progress[id]);
   const seek = useLink((s) => s.seek);
   const online = useLink((s) => s.online);
@@ -124,11 +129,12 @@ export function MeetingScreen({ id }: { id: string }) {
         </p>
         {working && (
           <div className="progress">
-            <p><Spinner size={13} /> {m.status === 'recording' ? 'Recording on your Mac' : `Transcribing on your Mac${progress ? ` · ${Math.round(progress * 100)}%` : ''}`}</p>
+            <p><Spinner size={13} /> {local ? `${stage ?? 'Working'} on this phone…` : m.status === 'recording' ? 'Recording on your Mac' : `Transcribing on your Mac${progress ? ` · ${Math.round(progress * 100)}%` : ''}`}</p>
             <div className="bar"><span style={{ width: `${(progress ?? 0.02) * 100}%` }} /></div>
           </div>
         )}
-        {m.status === 'error' && <p className="err">{m.error ?? 'Something went wrong with this recording.'}</p>}
+        {m.status === 'error' && <p className="err">{m.error ?? 'Something went wrong with this recording.'} {local && <button className="link" onClick={() => void processLocal(id.slice(6), true)}>Try again</button>}</p>}
+        {local && m.status === 'ready' && <p className="note local-note">Written on this phone with Groq, because your Mac was out of reach. It moves to your Mac automatically when the Mac is back, notes and all.</p>}
         {Object.entries(m.nameHints ?? {}).map(([spId, name]) => {
           const sp = speakers.find((s) => s.id === spId);
           return sp && (
@@ -172,7 +178,7 @@ export function MeetingScreen({ id }: { id: string }) {
       )}
       {m.hasAudio && (
         <audio
-          ref={audio} src={audioUrl(id)} preload="none"
+          ref={audio} src={audioSrc} preload="none"
           onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)}
           onPlaying={() => setLoading(false)} onWaiting={() => setLoading(true)} onCanPlay={() => setLoading(false)}
           onTimeUpdate={(e) => !e.currentTarget.seeking && setTime(e.currentTarget.currentTime)}
@@ -283,7 +289,7 @@ function Transcript({ m, paras, speakers, active, flash, time, playing, onPlay }
 }
 
 function Chat({ m, onTime }: { m: Meeting; onTime: (t: number) => void }) {
-  const notes = useLink((s) => s.notes);
+  const notes = useLink((s) => s.notes) || m.id.startsWith('local:');
   const [sid, setSid] = useState('');
   const [pending, setPending] = useState('');
   const stream = useLink((s) => (sid ? s.streams[sid] : undefined));
@@ -306,7 +312,7 @@ function Chat({ m, onTime }: { m: Meeting; onTime: (t: number) => void }) {
           {notes && m.status === 'ready' && ideas.map((i) => <button key={i} className="idea" onClick={() => ask(i)}>{i}</button>)}
         </div>
       ) : <Bubbles msgs={m.chat} pending={pending} stream={stream} onTime={onTime} />}
-      <Composer placeholder="Ask about this conversation" busy={!!pending} onSend={ask} onStop={() => void call('abort', sid).catch(() => undefined)} />
+      <Composer placeholder="Ask about this conversation" busy={!!pending} onSend={ask} offlineOk={m.id.startsWith('local:')} onStop={() => void call('abort', sid).catch(() => undefined)} />
     </div>
   );
 }

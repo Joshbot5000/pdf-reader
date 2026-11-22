@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { Meeting, TemplateId } from '../shared/types';
+import type { ChatMsg, Meeting, Para, Summary, TemplateId } from '../shared/types';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json',
@@ -19,7 +19,9 @@ const TYPES: Record<string, string> = {
 export const lanAddresses = (): string[] =>
   Object.values(os.networkInterfaces()).flat().filter((i): i is os.NetworkInterfaceInfo => !!i && i.family === 'IPv4' && !i.internal).map((i) => i.address);
 
-export type UploadMeta = { rid: string; createdAt: number; template: TemplateId; bookmarks: number[]; name?: string };
+/** Notes the phone already wrote (with Groq, while the Mac was out of reach): kept as they are. */
+export type PhoneNotes = { title: string; titleAuto: boolean; duration: number; paras: Para[]; summary?: Summary; chat?: ChatMsg[]; starred?: boolean };
+export type UploadMeta = { rid: string; createdAt: number; template: TemplateId; bookmarks: number[]; name?: string; notes?: PhoneNotes };
 
 export type PhoneHost = {
   dataDir: string;
@@ -64,6 +66,13 @@ export function servePhone(host: PhoneHost, port: number): Promise<PhoneServer> 
     /* none yet */
   }
   const inFlight = new Set<string>();
+  const readNotes = (rid: string): PhoneNotes | undefined => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(inbox, `${rid}.notes.json`), 'utf8')) as PhoneNotes;
+    } catch {
+      return undefined;
+    }
+  };
 
   const json = (res: http.ServerResponse, code: number, body: unknown): void => void res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
   const authed = (url: URL): boolean => same(url.searchParams.get('k') ?? '', token);
@@ -72,6 +81,30 @@ export function servePhone(host: PhoneHost, port: number): Promise<PhoneServer> 
     const url = new URL(req.url ?? '/', 'http://x');
     const p = decodeURIComponent(url.pathname);
     if (p === '/health') return json(res, 200, { ok: true, app: 'hark' });
+
+    if (p === '/attach' && req.method === 'POST') {
+      if (!authed(url)) return json(res, 401, { error: 'This phone is not paired.' });
+      const rid = (url.searchParams.get('rid') ?? '').replace(/[^a-z0-9]/gi, '').slice(0, 40);
+      if (!rid) return json(res, 400, { error: 'Missing recording id.' });
+      const parts: Buffer[] = [];
+      let size = 0;
+      req.on('data', (d: Buffer) => {
+        size += d.length;
+        if (size <= 8e6) parts.push(d);
+      });
+      req.on('end', () => {
+        if (size > 8e6) return json(res, 413, { error: 'Those notes are too large.' });
+        try {
+          const n = JSON.parse(Buffer.concat(parts).toString('utf8')) as PhoneNotes;
+          if (!Array.isArray(n.paras) || typeof n.title !== 'string') throw new Error('bad');
+          fs.writeFileSync(path.join(inbox, `${rid}.notes.json`), JSON.stringify(n));
+          json(res, 200, { ok: true });
+        } catch {
+          json(res, 400, { error: 'Those notes could not be read.' });
+        }
+      });
+      return;
+    }
 
     if (p === '/upload' && req.method === 'POST') {
       if (!authed(url)) return json(res, 401, { error: 'This phone is not paired.' });
@@ -114,7 +147,9 @@ export function servePhone(host: PhoneHost, port: number): Promise<PhoneServer> 
             template: (['meeting', 'lecture', 'interview', 'memo'].includes(tpl) ? tpl : 'meeting') as TemplateId,
             bookmarks: marks,
             name: url.searchParams.get('name')?.slice(0, 120) || undefined,
+            notes: readNotes(rid),
           });
+          fs.rmSync(path.join(inbox, `${rid}.notes.json`), { force: true });
           seen[rid] = m.id;
           const keys = Object.keys(seen);
           if (keys.length > 300) for (const k of keys.slice(0, keys.length - 300)) delete seen[k];

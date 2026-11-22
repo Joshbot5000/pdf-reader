@@ -12,7 +12,8 @@ import { Intelligence } from './intelligence';
 import { normalize } from '../shared/speakers';
 import { retime, toHtml, toMarkdown, toSrt, toText } from '../shared/text';
 import QRCode from 'qrcode';
-import { lanAddresses, servePhone, type PhoneServer, type UploadMeta } from './phone';
+import { lanAddresses, servePhone, type PhoneNotes, type PhoneServer, type UploadMeta } from './phone';
+import { PeakMeter } from '../shared/vad';
 import { checkGmail, notesEmail, sendGmail, sendWithMailApp, validEmail } from './mailer';
 import { uid } from '../shared/types';
 import type { Api, Events } from '../shared/api';
@@ -316,6 +317,16 @@ async function afterTranscript(id: string): Promise<void> {
 
 // ---------------------------------------------------------------- email
 
+const groqFile = path.join(dataDir, 'groq.json');
+/** The Groq key the phone uses when the Mac is out of reach. Kept here so it reaches every paired phone. */
+const groqKey = (): string => {
+  try {
+    return String(JSON.parse(fs.readFileSync(groqFile, 'utf8')).key ?? '');
+  } catch {
+    return '';
+  }
+};
+
 const mailSecretFile = path.join(dataDir, 'mail-secret.json');
 const mailPassword = (): string => {
   try {
@@ -436,6 +447,35 @@ function queueImport(file: string, source: 'import' | 'sample', title?: string):
 // ---------------------------------------------------------------- phone
 
 /** A recording sent from the phone: transcribe it like an import, but treat it as the user's own recording. */
+/** A recording the phone already transcribed and wrote up (with Groq): keep its notes exactly, just file the audio. */
+async function adoptPhone(m: Meeting, file: string, n: PhoneNotes): Promise<void> {
+  const audio = await runFfmpeg(['-y', '-i', file, '-vn', '-ac', '1', '-c:a', 'libopus', '-b:a', '48k', lib.audioPath(m.id)]);
+  // A waveform for the player, from the audio itself.
+  const peaks = new PeakMeter();
+  const dec = spawn(ffmpeg, ['-hide_banner', '-nostdin', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-f', 'f32le', '-']);
+  dec.stderr.resume();
+  let rest: Buffer = Buffer.alloc(0);
+  for await (const chunk of dec.stdout as AsyncIterable<Buffer>) {
+    const buf = rest.length ? Buffer.concat([rest, chunk]) : chunk;
+    const usable = buf.length - (buf.length % 4);
+    rest = buf.subarray(usable);
+    peaks.push(new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + usable)));
+  }
+  if (!lib.has(m.id)) return;
+  const speakers = [{ id: 'S1', name: 'Speaker 1', color: 0 }];
+  lib.saveTranscript(m.id, n.paras);
+  lib.update(m.id, {
+    status: 'ready', progress: undefined, duration: n.duration || m.duration, speakers, peaks: peaks.compact(), hasAudio: audio.code === 0,
+    summary: n.summary, chat: n.chat ?? [], starred: n.starred, title: n.title || m.title, titleAuto: n.titleAuto,
+  });
+  send('live', { type: 'paras', meetingId: m.id, paras: n.paras, speakers, duration: n.duration, replace: true });
+  await intel.index(m.id).catch(() => undefined);
+  // No notes came with it (Groq could not write them): write them here as usual.
+  const s = lib.settings();
+  if (!n.summary && (s.autoSummary || s.emailNotes) && models.installed(s.llmModel) && lib.get(m.id).words >= 25) await intel.summarize(m.id, `sum:${m.id}`).catch(() => undefined);
+  if (s.emailNotes && lib.has(m.id) && lib.get(m.id).summary) await emailNotes(m.id).catch(() => undefined);
+}
+
 function queuePhone(file: string, meta: UploadMeta): Meeting {
   const createdAt = Math.min(meta.createdAt, Date.now());
   const init = { createdAt } as Meeting;
@@ -445,7 +485,7 @@ function queuePhone(file: string, meta: UploadMeta): Meeting {
   });
   importChain = importChain.then(async () => {
     try {
-      if (lib.has(m.id)) await runImport(m, file);
+      if (lib.has(m.id)) await (meta.notes?.paras.length ? adoptPhone(m, file, meta.notes) : runImport(m, file));
       applyBookmarks(m.id);
       fs.rmSync(file, { force: true });
     } catch (err) {
@@ -494,6 +534,7 @@ async function startPhone(): Promise<void> {
           boot: async () => ({
             meetings: lib.list(), status: { ...status }, ask: lib.askHistory(), version: app.getVersion(),
             userName: lib.settings().userName, theme: lib.settings().theme, notes: models.installed(lib.settings().llmModel),
+            groqKey: groqKey(), emailNotes: lib.settings().emailNotes, language: lib.settings().language,
           }),
           getTranscript: api.getTranscript, updateMeeting: api.updateMeeting, deleteMeeting: api.deleteMeeting, updatePara: api.updatePara,
           renameSpeaker: api.renameSpeaker, dismissHint: api.dismissHint, setSummary: api.setSummary, summarize: api.summarize,
@@ -750,6 +791,17 @@ const api: Api = {
     return { saved: true };
   },
   emailStatus: async () => ({ hasPassword: !!mailPassword() }),
+  saveGroqKey: async (key) => {
+    const k = key.trim();
+    if (!k) return void fs.rmSync(groqFile, { force: true });
+    // Checked with Groq before it is kept.
+    const res = await net.fetch(`${process.env.HARK_GROQ_URL || 'https://api.groq.com/openai/v1'}/models`, { headers: { Authorization: `Bearer ${k}` } }).catch(() => null);
+    if (!res) throw new Error("Couldn't reach Groq to check the key. Is this Mac online?");
+    if (res.status === 401) throw new Error('Groq rejected that key. Copy it again from console.groq.com → API Keys.');
+    if (!res.ok) throw new Error(`Groq answered ${res.status}.`);
+    fs.writeFileSync(groqFile, JSON.stringify({ key: k }), { mode: 0o600 });
+  },
+  groqStatus: async () => ({ hasKey: !!groqKey() }),
   testEmail: async () => {
     const now = Date.now();
     const sample = {

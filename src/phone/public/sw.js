@@ -5,7 +5,7 @@ self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  if (/^\/(ws|audio|upload|health|manifest)/.test(url.pathname)) return;
+  if (/^\/(ws|audio|upload|attach|health|manifest)/.test(url.pathname)) return;
   // The pairing key is never part of what gets cached.
   const key = url.origin + url.pathname;
   e.respondWith(

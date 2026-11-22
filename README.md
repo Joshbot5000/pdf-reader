@@ -66,6 +66,8 @@ connections, allow it.
 - **Chat** about one conversation, or **Ask** across everything.
 - **Search** every word, name speakers, rename, star, share, delete.
 
+**When the Mac is off.** With a free [Groq](https://console.groq.com/keys) key (add it once in Hark on the Mac under Settings → Phone; the paired phone picks it up), the phone transcribes and writes the notes itself whenever it can't reach the Mac, in the same format, and you can read, play back and ask about them on the phone. When the Mac is reachable again, the phone hands over the recording with its notes; the Mac keeps them exactly as they are and emails them if email is on. Recordings made away from the Mac are sent to Groq to be processed; everything else stays on your devices. For this to work with the Mac completely off, install the phone app from the secure (Tailscale) address, so it can open without the Mac.
+
 **The microphone needs a secure link.** Phones only allow web apps to use the
 microphone over https. On plain home Wi-Fi the phone can do everything except
 one-tap recording (use *Add file* with a voice memo instead). For recording, and
@@ -133,6 +135,7 @@ npm run dev          # run with hot reload
 npm test             # unit tests (pause detection, speaker clustering, parsers, exports)
 npm run test:e2e     # drives the real app: sample → notes → chat → search → live recording
                      # (needs models already downloaded; point HARK_MODELS_DIR at them)
+npm run test:groq    # the phone working without the Mac (stand-in Groq), then handing over to the Mac
 npm run test:email   # transcribes the sample and emails its notes to a stand-in mail server
 npm run test:phone   # drives the phone app against the real desktop app (same model needs)
 npm run dist         # package for the current platform

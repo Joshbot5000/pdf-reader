@@ -231,3 +231,10 @@ button.card:active { transform: scale(.985); background: var(--panel2); }
 .gate p { color: var(--text2); }
 .gate ol { text-align: left; margin-top: 14px; padding-left: 22px; color: var(--text2); display: flex; flex-direction: column; gap: 6px; }
 .gate b { color: var(--text); }
+
+/* ---------- working without the Mac ---------- */
+.on-phone { color: var(--accent2); }
+.local-note { margin-top: 12px; font-size: 13px; }
+.key-row { display: flex; gap: 8px; margin-top: 10px; } .key-row input { flex: 1; min-width: 0; padding: 9px 12px; border-radius: 11px; background: var(--panel2); border: 1px solid var(--line2); font: 14px var(--mono); }
+.small-note { font-size: 12.5px; margin-top: 8px; }
+.note .chip { margin-left: 6px; vertical-align: 1px; } .chip.ok { color: var(--ok); border-color: color-mix(in oklab, var(--ok) 40%, transparent); }

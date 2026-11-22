@@ -1,6 +1,7 @@
 /** The phone's line to Hark on the Mac: one live connection, the library it mirrors, and a small store. */
 import { useSyncExternalStore } from 'react';
-import type { ChatMsg, EngineStatus, LiveEvent, Meeting, Para, Source, Speaker, StreamEvent } from '../../shared/types';
+import { groqKey, setGroqKey } from './groq';
+import type { ChatMsg, EngineStatus, LiveEvent, Meeting, Para, Source, Speaker, StreamEvent, Summary } from '../../shared/types';
 
 export type Stream = { text: string; running: boolean; error?: string; sources?: Source[]; stage?: string };
 export type Toast = { id: number; text: string; tone: 'info' | 'alert' };
@@ -9,7 +10,37 @@ export type Tab = 'library' | 'tasks' | 'ask';
 export type OutItem = {
   rid: string; createdAt: number; duration: number; template: Meeting['template']; bookmarks: number[]; mime: string; ext: string; bytes: number; name?: string;
   state: 'recording' | 'waiting' | 'sending'; sent?: number; error?: string;
+  /** Notes written on the phone (through Groq) while the Mac was out of reach. They go to the Mac with the audio. */
+  local?: LocalNotes;
 };
+export type LocalNotes = {
+  state: 'working' | 'ready' | 'error'; stage?: string; error?: string;
+  title: string; titleAuto: boolean; duration: number; paras: Para[]; summary?: Summary; chat: ChatMsg[]; starred?: boolean;
+};
+
+/** A conversation made on the phone, shaped like one from the Mac so the same screens show it. */
+const shaped = new WeakMap<OutItem, Meeting>();
+export function localMeeting(o: OutItem): Meeting {
+  const hit = shaped.get(o);
+  if (hit) return hit;
+  const l = o.local!;
+  const m: Meeting = {
+    id: `local:${o.rid}`, title: l.title, titleAuto: l.titleAuto, createdAt: o.createdAt, duration: l.duration || o.duration, source: 'phone',
+    status: l.state === 'ready' ? 'ready' : l.state === 'error' ? 'error' : 'processing', error: l.error,
+    speakers: [{ id: 'S1', name: 'Speaker 1', color: 0 }], summary: l.summary, summaryState: l.state === 'working' && l.paras.length ? 'running' : undefined,
+    chat: l.chat, notes: '', peaks: [], words: l.paras.reduce((n, p) => n + p.text.split(/\s+/).length, 0), preview: l.paras.map((p) => p.text).join(' ').slice(0, 220),
+    template: o.template, bookmarks: o.bookmarks, hasAudio: true, starred: l.starred,
+  };
+  shaped.set(o, m);
+  return m;
+}
+/** Any conversation by id: from the Mac, or made on this phone. */
+export const findMeeting = (s: State, id: string): Meeting | undefined => {
+  if (!id.startsWith('local:')) return s.meetings.find((m) => m.id === id);
+  const o = s.outbox.find((x) => `local:${x.rid}` === id && x.local);
+  return o ? localMeeting(o) : undefined;
+};
+export const transcriptOf = (s: State, id: string): Para[] | undefined => (id.startsWith('local:') ? s.outbox.find((x) => `local:${x.rid}` === id)?.local?.paras : s.transcripts[id]);
 
 export type State = {
   paired: boolean;
@@ -24,6 +55,9 @@ export type State = {
   ask: ChatMsg[];
   userName: string;
   notes: boolean;
+  /** What the Mac does with notes: emails them (so phone-made ones are emailed once the Mac has them). */
+  macEmails: boolean;
+  language: string;
   outbox: OutItem[];
   tab: Tab;
   open: string | null;
@@ -35,7 +69,7 @@ export type State = {
 
 let state: State = {
   paired: false, online: false, booted: false, meetings: [], transcripts: {}, liveSpeakers: {}, progress: {}, streams: {}, status: null, ask: [],
-  userName: '', notes: true, outbox: [], tab: 'library', open: null, seek: null, recorder: false, sheet: null, toasts: [],
+  userName: '', notes: true, macEmails: false, language: 'en', outbox: [], tab: 'library', open: null, seek: null, recorder: false, sheet: null, toasts: [],
 };
 const subs = new Set<() => void>();
 export const get = (): State => state;
@@ -112,6 +146,8 @@ let seq = 1;
 let retry = 500;
 const waits = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 const onlineHooks = new Set<() => void>();
+const offlineHooks = new Set<() => void>();
+export const whenOffline = (fn: () => void): void => void offlineHooks.add(fn);
 export const whenOnline = (fn: () => void): void => void onlineHooks.add(fn);
 
 export function call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
@@ -132,8 +168,10 @@ export const run = <T,>(p: Promise<T>): Promise<T | undefined> =>
 const sortMeetings = (list: Meeting[]): Meeting[] => [...list].sort((a, b) => b.createdAt - a.createdAt);
 
 async function boot(): Promise<void> {
-  const b = await call<{ meetings: Meeting[]; status: EngineStatus; ask: ChatMsg[]; userName: string; notes: boolean }>('boot');
-  set({ meetings: sortMeetings(b.meetings), status: b.status, ask: b.ask, userName: b.userName, notes: b.notes, booted: true });
+  const b = await call<{ meetings: Meeting[]; status: EngineStatus; ask: ChatMsg[]; userName: string; notes: boolean; groqKey?: string; emailNotes?: boolean; language?: string }>('boot');
+  set({ meetings: sortMeetings(b.meetings), status: b.status, ask: b.ask, userName: b.userName, notes: b.notes, booted: true, macEmails: !!b.emailNotes, language: b.language || 'en' });
+  // The Groq key is set once, on the Mac, and handed to the paired phone.
+  if (b.groqKey && b.groqKey !== groqKey()) setGroqKey(b.groqKey);
   saveCache();
   const open = state.open;
   if (open && b.meetings.some((m) => m.id === open)) void loadTranscript(open, true);
@@ -142,6 +180,8 @@ async function boot(): Promise<void> {
 export function connect(): void {
   if (!token()) return;
   const dev = params.get('port');
+  // Not paired with a Mac that answers: the phone still works on its own.
+  if (!navigator.onLine) setTimeout(() => offlineHooks.forEach((f) => f()), 0);
   const host = dev ? `${location.hostname}:${dev}` : location.host;
   let sock: WebSocket;
   try {
@@ -159,6 +199,7 @@ export function connect(): void {
   sock.onclose = () => {
     if (ws !== sock) return;
     set((s) => ({ online: false, streams: Object.fromEntries(Object.entries(s.streams).map(([k, v]) => [k, v.running ? { ...v, running: false, error: 'The connection to your Mac dropped.' } : v])) }));
+    offlineHooks.forEach((f) => f());
     for (const w of waits.values()) w.reject(new Error('Lost the connection to your Mac.'));
     waits.clear();
     setTimeout(connect, retry);
@@ -237,7 +278,7 @@ export async function loadTranscript(id: string, force = false): Promise<void> {
 export const openMeeting = (id: string, t?: number): void => {
   set((s) => ({ open: id, seek: t !== undefined ? { t, n: (s.seek?.n ?? 0) + 1 } : null }));
   history.pushState({ hark: 'meeting' }, '');
-  void loadTranscript(id, true);
+  if (!id.startsWith('local:')) void loadTranscript(id, true);
 };
 export const closeMeeting = (): void => {
   if (history.state?.hark) history.back();

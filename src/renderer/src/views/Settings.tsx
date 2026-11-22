@@ -172,6 +172,33 @@ function EmailTab() {
   );
 }
 
+/** The Groq key a paired phone uses to work on its own while this Mac is off or out of reach. */
+function GroqKey() {
+  const [has, setHas] = useState(false);
+  const [key, setKey] = useState('');
+  const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  useEffect(() => void api.groqStatus().then((r) => setHas(r.hasKey)), []);
+  const save = async (k: string) => {
+    setMsg({ text: k ? 'Checking with Groq…' : '' });
+    try {
+      await api.saveGroqKey(k);
+      setHas(!!k);
+      setKey('');
+      setMsg({ text: k ? 'Saved. Your phone picks it up the next time it connects to this Mac.' : 'Removed from this Mac. A phone that already has it keeps it until you remove it there.' });
+    } catch (e) {
+      setMsg({ text: (e as Error).message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''), bad: true });
+    }
+  };
+  return (
+    <>
+      <h5><Smartphone size={13} /> When this Mac is off {has && <span className="chip ok"><Check size={11} /> Groq key saved</span>}</h5>
+      <p className="lead">With a free Groq key, your phone transcribes and writes the notes itself whenever it can't reach this Mac, then hands the recording and its notes over when the Mac is back; they are then emailed as usual. Get a key at <a href="https://console.groq.com/keys" target="_blank" rel="noreferrer">console.groq.com/keys</a>. Recordings made away from the Mac are sent to Groq to be processed; everything else stays on your devices.</p>
+      <div className="row"><input className="link-in" type="password" value={key} placeholder={has ? 'Key saved (paste a new one to replace it)' : 'gsk_…'} spellCheck={false} onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && key.trim() && void save(key)} /><button className="btn small primary" disabled={!key.trim()} onClick={() => void save(key)}>Save key</button>{has && <button className="btn ghost small danger" onClick={() => void save('')}>Remove</button>}</div>
+      {msg?.text && <p className={msg.bad ? 'err-text' : 'dim small'}>{msg.text}</p>}
+    </>
+  );
+}
+
 /** Pair a phone: it becomes a pocket recorder and a window onto this library. */
 function PhoneTab() {
   const settings = useStore((s) => s.settings);
@@ -217,6 +244,7 @@ function PhoneTab() {
               <li>It prints an address starting with https. Paste it here, then scan the new code:</li>
             </ol>
             <input className="link-in" value={link} placeholder="https://your-mac.your-tailnet.ts.net" spellCheck={false} onChange={(e) => saveLink(e.target.value)} />
+            <GroqKey />
             <p className="dim small">Keep the code private: anyone who scans it can open your library. This computer needs to be on and awake for the phone to reach it; recordings made while it is out of reach wait on the phone and arrive later.</p>
           </>
         )

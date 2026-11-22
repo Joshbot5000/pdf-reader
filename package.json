@@ -16,7 +16,8 @@
     "test:e2e": "npm run build && node tests/tour.mjs scratch/shots",
     "dist": "npm run build && electron-builder",
     "test:phone": "npm run build && node tests/phone.mjs scratch/phone-shots",
-    "test:email": "npm run build && node tests/email.mjs"
+    "test:email": "npm run build && node tests/email.mjs",
+    "test:groq": "npm run build && node tests/groq.mjs"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.2",
