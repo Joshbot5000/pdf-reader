@@ -4,7 +4,7 @@ import type { ChatMsg, DownloadState, EngineStatus, Meeting, ModelInfo, Para, Se
 import { DEFAULT_SETTINGS } from '../../shared/types';
 
 export type View =
-  | { name: 'home'; folder?: string; starred?: boolean }
+  | { name: 'home'; folder?: string; starred?: boolean; tag?: string; archived?: boolean }
   | { name: 'ask' }
   | { name: 'tasks' }
   | { name: 'revise' }

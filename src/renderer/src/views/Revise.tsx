@@ -18,8 +18,10 @@ const ago = (t: number): string => {
 export function ReviseView() {
   const [o, setO] = useState<RevisionOverview | null>(null);
   const [session, setSession] = useState<RevisionItem[] | null>(null);
-  const load = () => void api.revisionOverview().then(setO);
-  useEffect(load, []);
+  const folders = useStore((s) => s.settings.folders);
+  const [folder, setFolder] = useState('');
+  const load = () => void api.revisionOverview(folder || undefined).then(setO);
+  useEffect(load, [folder]);
   if (!o) return <div className="center"><Spinner /></div>;
   if (session) return <Session items={session} done={() => (setSession(null), load())} />;
   return (
@@ -27,6 +29,7 @@ export function ReviseView() {
       <header className="page-head">
         <div><p className="eyebrow">{o.totals.items} questions and flashcards across {o.totals.lectures} lecture{o.totals.lectures === 1 ? '' : 's'}</p><h1>Revision</h1></div>
         <div className="row">
+          {!!folders.length && <FolderPick folders={folders} value={folder} set={setFolder} />}
           {o.totals.items > 0 && <button className="btn ghost" onClick={() => void run(api.exportStudy('', 'all-anki'))}><Download size={15} /> All flashcards to Anki</button>}
           <button className="btn primary" disabled={!o.session.length} onClick={() => setSession(o.session)}><Play size={15} /> {o.session.length ? `Revise now (${o.session.length})` : 'Nothing due'}</button>
         </div>
@@ -100,10 +103,14 @@ function Session({ items, done }: { items: RevisionItem[]; done: () => void }) {
 export function CasesView() {
   const [all, setAll] = useState<{ c: CaseRef; meetingId: string; title: string; date: number }[] | null>(null);
   const [q, setQ] = useState('');
+  const folders = useStore((s) => s.settings.folders);
+  const meetings = useStore((s) => s.meetings);
+  const [folder, setFolder] = useState('');
   useEffect(() => void api.caseBank().then(setAll), []);
   const groups = useMemo(() => {
     const by = new Map<string, { name: string; uses: NonNullable<typeof all> }>();
     for (const x of all ?? []) {
+      if (folder && meetings.find((m) => m.id === x.meetingId)?.folder !== folder) continue;
       const key = x.c.name.toLowerCase().replace(/\b(v|vs|versus|ltd|co|plc|company)\b|[^a-z0-9]+/g, '');
       if (!by.has(key)) by.set(key, { name: x.c.name, uses: [] });
       by.get(key)!.uses.push(x);
@@ -112,11 +119,11 @@ export function CasesView() {
     return [...by.values()]
       .filter((g) => !query || g.name.toLowerCase().includes(query) || g.uses.some((u) => `${u.c.principle} ${u.c.facts} ${u.title}`.toLowerCase().includes(query)))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [all, q]);
+  }, [all, q, folder, meetings]);
   if (!all) return <div className="center"><Spinner /></div>;
   return (
     <div className="page cases-page">
-      <header className="page-head"><div><p className="eyebrow">{groups.length} case{groups.length === 1 ? '' : 's'} across your lectures</p><h1>Case bank</h1></div></header>
+      <header className="page-head"><div><p className="eyebrow">{groups.length} case{groups.length === 1 ? '' : 's'} across your lectures</p><h1>Case bank</h1></div>{!!folders.length && <FolderPick folders={folders} value={folder} set={setFolder} />}</header>
       <label className="find"><Search size={15} /><input value={q} placeholder="Search cases, principles, facts or lectures" onChange={(e) => setQ(e.target.value)} /></label>
       {!all.length && <section className="empty"><Scale size={30} /><h3>No cases yet</h3><p>Cases are collected when a lecture is analysed (automatically for lectures, or from <b>Study → Cases & law</b>).</p></section>}
       <div className="study-list">
@@ -136,5 +143,15 @@ export function CasesView() {
         })}
       </div>
     </div>
+  );
+}
+
+/** Narrow a page to one folder (module), e.g. Contract or Tort. */
+function FolderPick({ folders, value, set }: { folders: string[]; value: string; set: (f: string) => void }) {
+  return (
+    <select className="folder-pick" value={value} onChange={(e) => set(e.target.value)} title="Module (folder)">
+      <option value="">All modules</option>
+      {folders.map((f) => <option key={f} value={f}>{f}</option>)}
+    </select>
   );
 }

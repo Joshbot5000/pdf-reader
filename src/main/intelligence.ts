@@ -5,6 +5,7 @@ import { parseNameHints, parseSummary, summaryInstruction, summarySystem } from 
 import { uid } from '../shared/types';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadMaterials, relevantPages } from './materials';
 import type { ChatMsg, Para, Source, Speaker, StreamEvent, Summary, TemplateId, TutorMode } from '../shared/types';
 
 const MODE_RULES: Record<TutorMode, string> = {
@@ -227,7 +228,8 @@ export class Intelligence {
     const userMsg: ChatMsg = { id: uid(), role: 'user', text: passage ? `“${passage.text.slice(0, 180)}${passage.text.length > 180 ? '…' : ''}” [${fmtTime(passage.t)}]\n\n${question}` : question, at: Date.now() };
     const history = m.chat.slice(-6).map((c) => ({ role: c.role, text: c.text }));
     const ctx = await this.llm.contextSize();
-    const budget = ctx - 900 - roughTokens(history.map((h) => h.text).join(' ')) - 300;
+    const mats = loadMaterials(this.lib.folder(meetingId));
+    const budget = ctx - 900 - roughTokens(history.map((h) => h.text).join(' ')) - 300 - (mats.length ? 750 : 0);
     const full = transcriptForLLM(paras, m.speakers);
     let material: string;
     if ((await this.llm.tokens(full)) <= budget) material = `Transcript:\n${full}`;
@@ -256,9 +258,12 @@ export class Intelligence {
         if (hits.length) others = `\n\nFrom your other lectures (cite as [lecture title, m:ss]):\n${hits.map((h) => `[${this.lib.get(h.meetingId).title}, ${fmtTime(h.chunk.s)}] ${h.chunk.text}`).join('\n---\n')}`;
       }
     }
+    // Slides and handouts: the pages that best match the question.
+    const pages = mats.length ? relevantPages(mats, `${question} ${passage?.text ?? ''}`, 2500) : '';
+    const slides = pages ? `\n\nFrom the course materials for this lecture (cite as [file, slide or page]; these count as lecture material):\n${pages}` : '';
     const focus = passage ? `\n\nThe student is asking about this passage, said at [${fmtTime(passage.t)}]:\n"${passage.text.slice(0, 1500)}"` : '';
     const lecture = m.template === 'lecture';
-    const system = `${lecture ? `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}` : `You are Hark, an assistant answering questions about the recorded conversation "${m.title}".${mode === 'lecture' ? ' Answer only from the material below.' : ''}`}\nGround your answer in the material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${others}${focus}`;
+    const system = `${lecture ? `You are Hark, a law tutor helping a student understand their recorded lecture "${m.title}". ${MODE_RULES[mode]}` : `You are Hark, an assistant answering questions about the recorded conversation "${m.title}".${mode === 'lecture' ? ' Answer only from the material below.' : ''}`}\nGround your answer in the material below and cite its timestamps in square brackets like [1:27]. Never invent cases, statutes, quotations or holdings; label anything that is not from the lecture. Be clear and reasonably brief; use short bullet points for lists.\n\n${material}${found}${slides}${others}${focus}`;
     try {
       const text = await this.llm.generate({ streamId, system, history, prompt: question, maxTokens: mode === 'exam' || mode === 'compare' ? 1000 : 750, temperature: mode === 'socratic' || mode === 'explain' ? 0.5 : 0.3, tier: 'strong' });
       const reply: ChatMsg = { id: uid(), role: 'assistant', text, at: Date.now() };

@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, BarChart3, Bookmark, CalendarClock, Captions, Check, ChevronLeft, Copy, Download, FileAudio, FileText, Folder, Highlighter, ListChecks, MessageCircle, NotebookPen, Pause, Pencil, Play, RotateCcw, RotateCw, Search, Sparkles, Square, Star, StickyNote, Trash2, UserRound, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Hash, ArrowUp, BarChart3, Bookmark, CalendarClock, Captions, Check, ChevronLeft, Copy, Download, FileAudio, FileText, Folder, Highlighter, ListChecks, MessageCircle, NotebookPen, Pause, Pencil, Play, RotateCcw, RotateCw, Search, Sparkles, Square, Star, StickyNote, Trash2, UserRound, X } from 'lucide-react';
 import { api } from '../api';
 import { clearStream, go, loadTranscript, run, set, startStream, toast, useStore } from '../store';
 import { Avatar, Md, Popover, Spinner, Waveform, colorOf, dayLabel, clock } from '../ui/bits';
@@ -23,6 +23,11 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
   const progress = useStore((s) => s.progress[id]);
   const folders = useStore((s) => s.settings.folders);
   const [tab, setTab] = useState<Tab>((initialTab as Tab) || 'summary');
+  useEffect(() => {
+    const on = (e: Event) => setTab((e as CustomEvent).detail as Tab);
+    window.addEventListener('hark-tab', on);
+    return () => window.removeEventListener('hark-tab', on);
+  }, []);
   // A passage selected in the transcript, to ask the tutor about.
   const [passage, setPassage] = useState<{ text: string; t: number } | null>(null);
   const [sel, setSel] = useState<{ text: string; t: number; x: number; y: number } | null>(null);
@@ -182,6 +187,10 @@ export function MeetingView({ id, at, tab: initialTab }: { id: string; at?: numb
               </div>
             )}
           </Popover>
+          <Popover align="right" trigger={(_o, t) => <button className={`icon-btn ${m.tags?.length ? 'on' : ''}`} title="Tags" onClick={t}><Hash size={16} /></button>}>
+            {() => <TagEditor m={m} />}
+          </Popover>
+          <button className="icon-btn" title={m.archived ? 'Unarchive' : 'Archive (hide from the main list)'} onClick={() => void run(api.updateMeeting(id, { archived: !m.archived })).then(() => toast(m.archived ? 'Back in your conversations.' : 'Archived. Find it under Archived in the sidebar.', 'ok'))}>{m.archived ? <ArchiveRestore size={16} /> : <Archive size={16} />}</button>
           <Popover align="right" trigger={(_o, t) => <button className="btn small" onClick={t}><Download size={14} /> Export</button>}>
             {(close) => (
               <div className="menu" onClick={close}>
@@ -668,6 +677,31 @@ function InsightsTab({ m, paras, speakers, seek }: { m: Meeting; paras: Para[]; 
         <div><b>{paras.filter((p) => p.hl).length}</b><span>highlights</span></div>
         <div><b>{Math.round(m.words / Math.max(1, talk / 60))}</b><span>words per minute overall</span></div>
       </section>
+    </div>
+  );
+}
+
+/** Add and remove tags; suggestions come from tags used on other conversations. */
+function TagEditor({ m }: { m: Meeting }) {
+  const all = useStore((s) => s.meetings);
+  const [text, setText] = useState('');
+  const mine = m.tags ?? [];
+  const others = [...new Set(all.flatMap((x) => x.tags ?? []))].filter((t) => !mine.includes(t)).sort();
+  const save = (tags: string[]) => void run(api.updateMeeting(m.id, { tags }));
+  const add = (t: string) => {
+    t = t.trim().replace(/^#/, '').toLowerCase();
+    if (t && !mine.includes(t)) save([...mine, t]);
+    setText('');
+  };
+  return (
+    <div className="menu tag-editor">
+      <p className="menu-label">Tags</p>
+      <div className="tag-list">
+        {mine.map((t) => <span key={t} className="chip tag">#{t}<button aria-label={`Remove ${t}`} onClick={() => save(mine.filter((x) => x !== t))}><X size={11} /></button></span>)}
+        {!mine.length && <span className="dim small">No tags yet.</span>}
+      </div>
+      <input autoFocus placeholder="Add a tag, e.g. week 3" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add(text)} />
+      {!!others.length && <div className="tag-list">{others.slice(0, 12).map((t) => <button key={t} className="chip tag ghost" onClick={() => add(t)}>+ #{t}</button>)}</div>}
     </div>
   );
 }

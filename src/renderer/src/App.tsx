@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AudioLines, GraduationCap, Scale, Check, CircleAlert, FolderPlus, Folder, Home as HomeIcon, ListChecks, Mic, Moon, Search, Settings as Cog, Sparkles, Star, Sun, Upload, X } from 'lucide-react';
+import { Archive, AudioLines, GraduationCap, Hash, Scale, Check, CircleAlert, FolderPlus, Folder, Home as HomeIcon, ListChecks, Mic, Moon, Search, Settings as Cog, Sparkles, Star, Sun, Upload, X } from 'lucide-react';
 import { api } from './api';
 import { boot, get, go, run, saveSettings, set, toast, useStore, type View } from './store';
 import { bookmark, startRecording, stopRecording } from './recorder';
@@ -77,7 +77,20 @@ export function App() {
       depth = 0;
       setDragging(false);
       const paths = Array.from(e.dataTransfer!.files).map((f) => window.hark.pathFor(f)).filter(Boolean);
-      if (paths.length && get().settings.onboarded) void importFiles(paths);
+      const docs = paths.filter((p) => /\.(pdf|pptx|docx|txt|md)$/i.test(p));
+      const media = paths.filter((p) => !docs.includes(p));
+      if (docs.length) {
+        const v = get().view;
+        if (v.name !== 'meeting') toast('Open a lecture first, then drop its slides or handout on it.', 'info');
+        else
+          void api.addMaterials(v.id, docs).then((r) => {
+            window.dispatchEvent(new CustomEvent('hark-materials', { detail: v.id }));
+            window.dispatchEvent(new CustomEvent('hark-tab', { detail: 'study' }));
+            if (r.errors.length) toast(r.errors.join(' '), 'error');
+            else toast(`Attached ${docs.length === 1 ? 'the file' : `${docs.length} files`} to this lecture. Notes and the tutor will use ${docs.length === 1 ? 'it' : 'them'}.`, 'ok');
+          });
+      }
+      if (media.length && get().settings.onboarded) void importFiles(media);
     };
     window.addEventListener('keydown', key);
     window.addEventListener('dragenter', enter);
@@ -119,7 +132,7 @@ export function App() {
       )}
       {dragging && onboarded && (
         <div className="drop-veil">
-          <div className="drop-card"><Upload size={30} /><b>Drop to transcribe</b><span>Audio or video, any length. It never leaves this computer.</span></div>
+          <div className="drop-card"><Upload size={30} /><b>Drop to add</b><span>Audio or video to transcribe, or slides and handouts (PDF, PowerPoint, Word) to attach to the open lecture.</span></div>
         </div>
       )}
       <Toasts />
@@ -170,6 +183,12 @@ function Sidebar() {
   const meetings = useStore((s) => s.meetings);
   const rec = useStore((s) => s.rec);
   const folders = useStore((s) => s.settings.folders);
+  const tags = useMemo(() => {
+    const n = new Map<string, number>();
+    for (const m of meetings) for (const t of m.tags ?? []) n.set(t, (n.get(t) ?? 0) + 1);
+    return [...n].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [meetings]);
+  const archivedCount = meetings.filter((m) => m.archived).length;
   const theme = useStore((s) => s.settings.theme);
   const [adding, setAdding] = useState(false);
   const open = useMemo(() => meetings.reduce((n, m) => n + (m.summary?.actions.filter((a) => !a.done).length ?? 0), 0), [meetings]);
@@ -196,8 +215,8 @@ function Sidebar() {
         </button>
       )}
       <nav className="nav">
-        <button className={is({ name: 'home' }, (v) => v.name === 'home' && !v.folder && !v.starred) ? 'on' : ''} onClick={() => go({ name: 'home' })}>
-          <HomeIcon size={16} /> Conversations <span className="count">{meetings.length || ''}</span>
+        <button className={is({ name: 'home' }, (v) => v.name === 'home' && !v.folder && !v.starred && !v.tag && !v.archived) ? 'on' : ''} onClick={() => go({ name: 'home' })}>
+          <HomeIcon size={16} /> Conversations <span className="count">{meetings.filter((m) => !m.archived).length || ''}</span>
         </button>
         <button className={is({ name: 'ask' }) ? 'on' : ''} onClick={() => go({ name: 'ask' })}>
           <Sparkles size={16} /> Ask Hark <kbd>⌘J</kbd>
@@ -229,6 +248,16 @@ function Sidebar() {
         ))}
         {adding && <input autoFocus className="folder-input" placeholder="Folder name" onBlur={(e) => addFolder(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addFolder(e.currentTarget.value); if (e.key === 'Escape') setAdding(false); }} />}
         {!folders.length && !adding && <p className="side-hint">Group conversations by project, client or module.</p>}
+        {tags.map(([t, n]) => (
+          <button key={t} className={is({ name: 'home' }, (v) => v.name === 'home' && v.tag === t) ? 'on' : ''} onClick={() => go({ name: 'home', tag: t })}>
+            <Hash size={14} /> {t} <span className="count">{n}</span>
+          </button>
+        ))}
+        {archivedCount > 0 && (
+          <button className={is({ name: 'home' }, (v) => v.name === 'home' && !!v.archived) ? 'on' : ''} onClick={() => go({ name: 'home', archived: true })}>
+            <Archive size={14} /> Archived <span className="count">{archivedCount}</span>
+          </button>
+        )}
       </nav>
       <div className="side-foot">
         <EngineStatus />

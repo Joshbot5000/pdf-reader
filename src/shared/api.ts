@@ -6,7 +6,7 @@ export type Api = {
   boot(): Promise<{ settings: Settings; meetings: Meeting[]; models: ModelInfo[]; status: EngineStatus; downloads: DownloadState[]; platform: string; version: string; ask: ChatMsg[] }>;
   listMeetings(): Promise<Meeting[]>;
   getTranscript(id: string): Promise<Para[]>;
-  updateMeeting(id: string, patch: Partial<Pick<Meeting, 'title' | 'folder' | 'starred' | 'notes' | 'template'>>): Promise<Meeting>;
+  updateMeeting(id: string, patch: Partial<Pick<Meeting, 'title' | 'folder' | 'starred' | 'notes' | 'template' | 'tags' | 'archived'>>): Promise<Meeting>;
   deleteMeeting(id: string): Promise<void>;
   updatePara(id: string, paraId: string, patch: { text?: string; hl?: boolean; note?: string; sp?: string; tag?: ParaTag | null }): Promise<Para[]>;
   renameSpeaker(id: string, speakerId: string, name: string): Promise<Meeting>;
@@ -58,9 +58,15 @@ export type Api = {
   studyRevision(id: string, kind: 'cards' | 'sbaqs' | 'shortQs' | 'problems', opts: { count: number; difficulty: Difficulty }, streamId: string): Promise<StudyPack>;
   /** Edit what was generated (flashcards and questions can be changed, added or deleted). */
   studySave(id: string, patch: Partial<StudyPack>): Promise<StudyPack>;
+  /** Slides and handouts attached to a lecture. */
+  materials(id: string): Promise<MaterialInfo[]>;
+  /** Attach files (a file dialog opens when no paths are given). Files that could not be read are reported in errors. */
+  addMaterials(id: string, paths?: string[]): Promise<{ list: MaterialInfo[]; errors: string[] }>;
+  removeMaterial(id: string, materialId: string): Promise<MaterialInfo[]>;
   /** Record an answer, for spaced repetition and the knowledge-gap tracker. */
   practice(key: string, right: boolean, topic: string, lectureId: string): Promise<void>;
-  revisionOverview(): Promise<RevisionOverview>;
+  /** The revision dashboard, for every lecture or for one folder (module). */
+  revisionOverview(folder?: string): Promise<RevisionOverview>;
   caseBank(): Promise<{ c: CaseRef; meetingId: string; title: string; date: number }[]>;
   exportStudy(id: string, what: 'notes' | 'notes-docx' | 'anki' | 'all-anki'): Promise<string | null>;
   /** Email one conversation's notes now. */
@@ -101,3 +107,5 @@ export type Bridge = {
   on<K extends keyof Events>(event: K, cb: (data: Events[K]) => void): () => void;
   pathFor(file: File): string;
 };
+
+export type MaterialInfo = { id: string; name: string; kind: string; pages: number; at: number };

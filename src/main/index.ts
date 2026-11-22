@@ -1,3 +1,4 @@
+import { MATERIAL_TYPES, loadMaterials, readMaterial, saveMaterials, type Material } from './materials';
 import { app, BrowserWindow, Menu, Notification, Tray, screen, clipboard, globalShortcut, nativeImage, desktopCapturer, dialog, ipcMain, nativeTheme, net, protocol, session, shell, systemPreferences, utilityProcess } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -750,6 +751,8 @@ const saveWithDialog = async (name: string, ext: string, write: (file: string) =
   return r.filePath;
 };
 
+const info = (m: Material) => ({ id: m.id, name: m.name, kind: m.kind, pages: m.pages.length, at: m.at });
+
 const api: Api = {
   boot: async () => ({
     settings: lib.settings(), meetings: lib.list(), models: models.list(ramGb), status: { ...status }, downloads: models.downloads(),
@@ -1013,19 +1016,45 @@ const api: Api = {
   studyLegal: (id, streamId) => (stopped.delete(streamId), study.legal(id, streamId)),
   studyRevision: (id, kind, opts, streamId) => (stopped.delete(streamId), study.revision(id, kind, opts, streamId)),
   studySave: async (id, patch) => study.save(id, patch),
+  materials: async (id) => loadMaterials(lib.folder(id)).map(info),
+  addMaterials: async (id, paths) => {
+    if (!paths?.length) {
+      const r = await dialog.showOpenDialog(win!, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'Slides & handouts', extensions: MATERIAL_TYPES }] });
+      paths = r.canceled ? [] : r.filePaths;
+    }
+    const list = loadMaterials(lib.folder(id));
+    const errors: string[] = [];
+    for (const p of paths) {
+      try {
+        const m = await readMaterial(p);
+        const i = list.findIndex((x) => x.name === m.name);
+        if (i >= 0) list[i] = m; // the same file again: replace it with the new version
+        else list.push(m);
+      } catch (err) {
+        errors.push((err as Error).message);
+      }
+    }
+    saveMaterials(lib.folder(id), list);
+    return { list: list.map(info), errors };
+  },
+  removeMaterial: async (id, materialId) => {
+    const list = loadMaterials(lib.folder(id)).filter((m) => m.id !== materialId);
+    saveMaterials(lib.folder(id), list);
+    return list.map(info);
+  },
   practice: async (key, right, topic, lectureId) => {
     const p = readPractice();
     record(p, key, right, topic, lectureId);
     writePractice(p);
   },
-  revisionOverview: async () => {
+  revisionOverview: async (folder) => {
     const practice = readPractice();
     const items: RevisionItem[] = [];
     const confusing: { meetingId: string; title: string; paraId: string; t: number; text: string }[] = [];
     const confusedTopics: Record<string, number> = {};
     const untested: { id: string; title: string }[] = [];
     let lectures = 0;
-    for (const m of lib.list()) {
+    for (const m of lib.list().filter((x) => !folder || x.folder === folder)) {
       const pack = study.get(m.id);
       const fallback = pack.legal?.topics[0] ?? m.title;
       const lectureTopics = pack.legal?.topics ?? [];

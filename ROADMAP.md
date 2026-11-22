@@ -39,7 +39,11 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 7. Polish
    - [x] Bookmark categories (Important, Confusing, Exam focus, Follow up), text size, resizable side panel, Anki export
    - [x] DOCX export (notes and whole lectures), floating live-transcript window (tests/mini.mjs)
-   - [ ] Tags/subjects beyond folders, PDF/slide import as lecture materials
+   - [x] Lecture materials: attach slides and handouts (PDF, PowerPoint .pptx, Word .docx, text) by button or drag-and-drop.
+         Notes use them for structure and spellings; case analysis takes correct case names from the slides and lists
+         slide cases the lecturer skipped; the tutor cites them as [file, slide N] (tests/materials.test.ts; live run)
+   - [x] Tags (header # button, sidebar list, click a tag on a card to filter), archive (hidden from the list,
+         sidebar "Archived"), Revision and Case bank filtered by module folder (scratch live test 9/9)
 
 ## How it was tested (22 Nov)
 - Unit tests (tests/unit.test.ts): emphasis cues, case-name and statute detection on speech-to-text spellings,
@@ -47,10 +51,16 @@ Audit date: 22 Nov 2026. Status: [x] done and tested · [~] partly · [ ] not st
 - Live, real Groq, real transcription: a 2.7-minute synthetic contract-law lecture (scratch, not committed) imported,
   transcribed on the Mac, analysed: 5 cases with principles, Misrepresentation Act 1967 s 2(1), all 6 lecturer cues
   with times, exam notes, SBAQs, flashcards, exam-mode tutor answer on a selected passage; no page errors.
+- Lecture materials (22 Nov): unit tests read a real .pptx, .pdf and .docx; live run attached slides to the lecture:
+  Carlill and Hyde v Wrench names confirmed from slides, Butler Machine Tool listed as "on your slides, not heard",
+  tutor in lecture-only mode correctly said Butler was on the slides but not covered.
+- Run the Electron tests with HARK_MODELS_DIR pointing at downloaded models (scratch/models here).
 - tests/recover.mjs (crash recovery), tests/email.mjs, tests/groq.mjs, tests/phone.mjs still pass.
 
 ## Known limits / next tasks
-- Exact next task: PDF/slide import as lecture materials (used by notes and the tutor's lecture-only mode).
+- Exact next task: track repeated tutor questions per topic in the knowledge-gap dashboard (a topic you keep asking
+  about counts as a weak spot), then keyboard navigation polish (j/k through conversations, ? for a shortcut list).
+- Scanned PDFs (images only) are refused with a clear message: there is no OCR.
 - Groq free plan is ~8,000 tokens/minute per model: long lectures are analysed in parts with waits (minutes, not seconds).
 - "Research" tutor mode has no web search; it uses general knowledge, clearly labelled, and points to where to verify.
 - Legislation links go to a legislation.gov.uk search for the Act; the section text itself is not fetched or verified.

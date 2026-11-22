@@ -12,6 +12,7 @@ import type { LlmApi } from './intelligence';
 import { fmtTime, parseTime, roughTokens, transcriptForLLM } from '../shared/text';
 import { NOTE_STYLES, explicitEmphasis, findCaseNames, findLegislation, legislationLink, locate, locateName, norm, parseJson, type CaseRef, type Card, type Difficulty, type Emphasis, type LawRef, type NoteStyle, type Problem, type Sbaq, type ShortQ, type StudyPack } from '../shared/law';
 import { uid } from '../shared/types';
+import { loadMaterials, materialCases, materialsOutline } from './materials';
 import type { StreamEvent } from '../shared/types';
 
 const FAITHFUL = `You are an expert UK law tutor (England and Wales) helping a student on an MA Law conversion course revise from a recorded lecture.
@@ -47,6 +48,17 @@ const SECTIONS = `Use these markdown headings, in this order, and leave out any 
 Put the [m:ss] time from the transcript after each important point, case or rule, so it can be found in the recording.\nUse headings, bullet points and **bold**; do not use tables.`;
 
 type Send = (e: StreamEvent) => void;
+
+const firstWord = (name: string): string => norm(name).split(' ').find((w) => w.length > 2 && !['the', 'and'].includes(w)) ?? '';
+/** Close spellings, as speech-to-text mishears names (Hide/Hyde, Carlil/Carlill). */
+function soundsAlike(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b || a.startsWith(b) || b.startsWith(a)) return true;
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length] <= Math.max(1, Math.floor(Math.min(a.length, b.length) / 4));
+}
 
 export class Study {
   constructor(private lib: Library, private llm: LlmApi, private send: Send, private stopped: (streamId: string) => boolean) {}
@@ -89,6 +101,13 @@ export class Study {
     return out;
   }
 
+  /** Slides and handouts attached to the lecture, as a block for a prompt (empty when there are none). */
+  private slides(id: string, budget: number): string {
+    const mats = loadMaterials(this.lib.folder(id));
+    if (!mats.length) return '';
+    return `\n\nThe course materials for this lecture (slides and handouts), page by page:\n${materialsOutline(mats, budget)}\n\nUse the materials to get the spelling of case names and statutes right and to follow the lecture's structure. The lecture itself is the main source: add a point that appears only in the materials only if it fits, and mark it "(slides)".`;
+  }
+
   private stage(streamId: string, stage: string): void {
     this.send({ streamId, stage });
   }
@@ -121,10 +140,10 @@ export class Study {
       const text = await this.llm.generate({
         streamId, tier: 'strong', temperature: 0.2, maxTokens: style === 'onepage' ? 700 : style === 'concise' ? 1300 : 2200,
         system: FAITHFUL,
-        prompt: `${source}\n\nWrite ${STYLE_RULES[style]}\n\n${style === 'onepage' ? 'Use a title, then short sections for the key rules, cases and exam points, keeping [m:ss] times.' : SECTIONS}`,
+        prompt: `${source}${this.slides(id, parts.length > 1 ? 3000 : 3500)}\n\nWrite ${STYLE_RULES[style]}\n\n${style === 'onepage' ? 'Use a title, then short sections for the key rules, cases and exam points, keeping [m:ss] times.' : SECTIONS}`,
       });
       this.check(streamId);
-      const pack = this.save(id, { notes: { style, text: text.trim(), at: Date.now(), model: this.llm.modelName() } });
+      const pack = this.save(id, { notes: { style, text: text.trim().replace(/\\([[\]])/g, '$1'), at: Date.now(), model: this.llm.modelName() } });
       this.send({ streamId, done: true });
       return pack;
     } catch (err) {
@@ -178,6 +197,15 @@ export class Study {
         // Already covered: a case the AI described at (about) the same moment.
         if (cases.some((x) => x.t >= 0 && Math.abs(x.t - h.t) < 25)) continue;
         cases.push({ name: h.name, facts: 'Not explained in the lecture.', issue: '', judgment: '', principle: '', why: `Mentioned at ${fmtTime(h.t)}.`, t: h.t, found: true });
+      }
+      // Slides: they spell case names correctly, so use them to fix names the recording garbled, and list cases that are on the slides but were not discussed.
+      for (const sc of materialCases(loadMaterials(this.lib.folder(id)))) {
+        const same = cases.find((c) => locateName([{ id: '', sp: '', s: 0, e: 0, text: c.name, words: [] }], sc.name).t >= 0 || locateName([{ id: '', sp: '', s: 0, e: 0, text: sc.name, words: [] }], c.name).t >= 0);
+        if (same) {
+          // Take the slide's spelling only when it is plainly the same case (the first party sounds alike), not merely a shared party.
+          if (same.uncertain && same.found && soundsAlike(firstWord(same.name), firstWord(sc.name))) (same.name = sc.name), (same.uncertain = undefined), (same.why = `${same.why ? `${same.why} ` : ''}(Name as spelled in ${sc.where}.)`.trim());
+          else if (norm(same.name) !== norm(sc.name)) same.why = `${same.why ? `${same.why} ` : ''}(On ${sc.where} as “${sc.name}”.)`.trim();
+        } else cases.push({ name: sc.name, facts: 'Not explained in the lecture.', issue: '', judgment: '', principle: '', why: `On ${sc.where}.`, t: -1, found: false, uncertain: 'On your slides but not heard in the recording: the lecturer may have skipped it.' });
       }
       // Legislation: the AI's account of what was said, plus every reference heard in the transcript.
       const laws: LawRef[] = [];

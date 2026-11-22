@@ -1,12 +1,13 @@
 /** Study tools for one lecture: law notes, exam focus, cases and legislation, and a revision pack. */
 import { useEffect, useState } from 'react';
-import { AlertTriangle, BookOpen, Check, Copy, Download, ExternalLink, Flag, GraduationCap, Layers, ListChecks, Pencil, Plus, RotateCw, Scale, Sparkles, Trash2, X } from 'lucide-react';
+import { AlertTriangle, BookOpen, Check, Copy, Download, ExternalLink, FileText, Paperclip, Flag, GraduationCap, Layers, ListChecks, Pencil, Plus, RotateCw, Scale, Sparkles, Trash2, X } from 'lucide-react';
 import { api } from '../api';
 import { clearStream, run, startStream, toast, useStore } from '../store';
 import { Md, Spinner } from '../ui/bits';
 import { fmtTime } from '../../../shared/text';
 import { NOTE_STYLES, type Card, type Difficulty, type NoteStyle, type Sbaq, type StudyPack } from '../../../shared/law';
 import type { Meeting } from '../../../shared/types';
+import type { MaterialInfo } from '../../../shared/api';
 import { uid } from '../../../shared/types';
 
 type Seek = (t: number, play?: boolean) => void;
@@ -81,6 +82,7 @@ function NotesPane({ m, pack, setPack, seek }: { m: Meeting; pack: StudyPack; se
   const notes = pack.notes;
   return (
     <>
+      <Materials m={m} />
       <div className="study-bar">
         <select value={style} onChange={(e) => setStyle(e.target.value as NoteStyle)} title="Note style">
           {(Object.keys(NOTE_STYLES) as NoteStyle[]).map((s) => <option key={s} value={s}>{NOTE_STYLES[s].name}</option>)}
@@ -96,6 +98,43 @@ function NotesPane({ m, pack, setPack, seek }: { m: Meeting; pack: StudyPack; se
         : notes ? <div className="study-notes"><Md text={notes.text} onTime={(t) => seek(t, true)} /><p className="sum-foot dim small">{NOTE_STYLES[notes.style].name} · {notes.model ? `written by ${notes.model}` : ''} · times link to the recording. Check anything marked [check] and anything “not from the lecture”.</p></div>
         : !job.busy && <div className="empty small"><BookOpen size={22} /><p>Structured law notes from this lecture: definitions, rules, tests, cases, legislation, the lecturer's examples, exam tips and points to check. Pick a style and press <b>Write notes</b>.</p></div>}
     </>
+  );
+}
+
+/** Slides and handouts attached to the lecture: the notes, case analysis and tutor read them alongside the transcript. */
+function Materials({ m }: { m: Meeting }) {
+  const [list, setList] = useState<MaterialInfo[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    const load = () => void api.materials(m.id).then(setList);
+    load();
+    const on = (e: Event) => (e as CustomEvent).detail === m.id && load();
+    window.addEventListener('hark-materials', on);
+    return () => window.removeEventListener('hark-materials', on);
+  }, [m.id]);
+  const add = async () => {
+    setBusy(true);
+    try {
+      const r = await api.addMaterials(m.id);
+      setList(r.list);
+      if (r.errors.length) toast(r.errors.join(' '), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!list) return null;
+  return (
+    <div className="materials">
+      <Paperclip size={13} className="dim" />
+      {list.map((x) => (
+        <span key={x.id} className="mat-chip" title={`${x.pages} ${x.kind === 'pptx' ? 'slide' : 'page'}${x.pages === 1 ? '' : 's'} · used by the notes, case analysis and tutor`}>
+          <FileText size={12} /> {x.name}
+          <button aria-label={`Remove ${x.name}`} onClick={() => void api.removeMaterial(m.id, x.id).then(setList)}><X size={11} /></button>
+        </span>
+      ))}
+      <button className="btn ghost small" disabled={busy} onClick={() => void add()}>{busy ? <Spinner size={12} /> : <Plus size={13} />} {list.length ? 'Add' : 'Add slides or handout'}</button>
+      {!list.length && <span className="dim small">PDF, PowerPoint or Word: helps with case spellings and structure. You can also drop files here.</span>}
+    </div>
   );
 }
 

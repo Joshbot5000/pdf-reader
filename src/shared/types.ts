@@ -71,6 +71,10 @@ export type Meeting = {
   error?: string;
   folder?: string;
   starred?: boolean;
+  /** Free tags, e.g. a topic or week ("week 3", "remedies"). */
+  tags?: string[];
+  /** Hidden from the main list; still searchable and revisable. */
+  archived?: boolean;
   speakers: Speaker[];
   summary?: Summary;
   summaryState?: 'running' | 'error';

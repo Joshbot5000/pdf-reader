@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ArrowUp, FileAudio, GraduationCap, Mic, MessagesSquare, NotebookPen, Play, Sparkles, Star, Trash2, Upload, Users } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowUp, FileAudio, GraduationCap, Mic, MessagesSquare, NotebookPen, Play, Sparkles, Star, Trash2, Upload, Users } from 'lucide-react';
 import { api } from '../api';
 import { go, run, set, useStore } from '../store';
 import { startRecording } from '../recorder';
@@ -32,7 +32,9 @@ export function Home() {
   const [q, setQ] = useState('');
   const folder = view.name === 'home' ? view.folder : undefined;
   const starred = view.name === 'home' ? view.starred : undefined;
-  const shown = useMemo(() => meetings.filter((m) => (!folder || m.folder === folder) && (!starred || m.starred)), [meetings, folder, starred]);
+  const tag = view.name === 'home' ? view.tag : undefined;
+  const archived = view.name === 'home' ? !!view.archived : false;
+  const shown = useMemo(() => meetings.filter((m) => !!m.archived === archived && (!folder || m.folder === folder) && (!starred || m.starred) && (!tag || m.tags?.includes(tag))), [meetings, folder, starred, tag, archived]);
   const groups = useMemo(() => {
     const g: [string, Meeting[]][] = [];
     for (const m of shown) {
@@ -65,7 +67,7 @@ export function Home() {
       <header className="page-head">
         <div>
           <p className="eyebrow">{new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-          <h1>{folder ?? (starred ? 'Starred' : hello)}</h1>
+          <h1>{folder ?? (tag ? `#${tag}` : archived ? 'Archived' : starred ? 'Starred' : hello)}</h1>
         </div>
         <div className="stats">
           <div><b>{stats.hours < 1 ? Math.round(stats.hours * 60) : stats.hours < 10 ? stats.hours.toFixed(1) : Math.round(stats.hours)}</b><span>{stats.hours < 1 ? 'minutes kept' : 'hours kept'}</span></div>
@@ -74,7 +76,7 @@ export function Home() {
         </div>
       </header>
 
-      {!folder && !starred && (
+      {!folder && !starred && !tag && !archived && (
         <section className="hero">
           <div className="hero-rec">
             <div className="hero-orb"><Orb size={150} /></div>
@@ -115,7 +117,7 @@ export function Home() {
           <button className="btn" disabled={missing} onClick={() => void run(api.importSample()).then((m) => m && go({ name: 'meeting', id: m.id }))}><Play size={15} /> Try the sample conversation</button>
         </section>
       ) : !shown.length ? (
-        <section className="empty"><Star size={28} /><h3>Nothing here yet</h3><p>{starred ? 'Star a conversation to keep it close.' : 'Move conversations into this folder from their header.'}</p></section>
+        <section className="empty"><Star size={28} /><h3>Nothing here yet</h3><p>{starred ? 'Star a conversation to keep it close.' : archived ? 'Archived conversations appear here.' : tag ? 'No conversations have this tag.' : 'Move conversations into this folder from their header.'}</p></section>
       ) : (
         groups.map(([label, list]) => (
           <section key={label} className="group">
@@ -143,6 +145,7 @@ function Card({ m }: { m: Meeting }) {
           <span>{clock(m.createdAt)}</span>
           {m.duration > 0 && <span>{fmtDuration(m.duration)}</span>}
           {m.folder && <span className="chip">{m.folder}</span>}
+          {m.tags?.map((t) => <span key={t} className="chip tag" onClick={(e) => (e.stopPropagation(), go({ name: 'home', tag: t }))}>#{t}</span>)}
           {m.summaryState === 'running' && <span className="chip glow"><Sparkles size={11} /> writing notes</span>}
           {open > 0 && <span className="chip todo">{open} to do</span>}
         </p>
@@ -155,6 +158,7 @@ function Card({ m }: { m: Meeting }) {
       </div>
       <div className="card-actions" onClick={(e) => e.stopPropagation()}>
         <button className="icon-btn" title={m.starred ? 'Unstar' : 'Star'} onClick={() => void run(api.updateMeeting(m.id, { starred: !m.starred }))}><Star size={14} fill={m.starred ? 'currentColor' : 'none'} /></button>
+        <button className="icon-btn" title={m.archived ? 'Unarchive' : 'Archive'} onClick={() => void run(api.updateMeeting(m.id, { archived: !m.archived }))}>{m.archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}</button>
         <button className="icon-btn danger" title="Delete" onClick={() => confirm(`Delete “${m.title}”? This removes the recording and transcript.`) && void run(api.deleteMeeting(m.id))}><Trash2 size={14} /></button>
       </div>
     </article>
